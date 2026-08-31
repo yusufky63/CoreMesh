@@ -7,16 +7,16 @@ import {
   KeyRound,
   LockKeyhole,
   Plus,
+  RefreshCw,
   Send,
   ShieldCheck,
 } from 'lucide-react';
 import {
   decryptDirectMessage,
   encryptDirectMessage,
-  randomId,
-  signMessage,
+  signTechnocoreMessage,
 } from '@/lib/crypto';
-import type { ProtocolMessage } from '@/lib/domain';
+import { HttpTechnocoreAdapter } from '@/lib/adapters';
 import { useCoreMesh } from '@/lib/store';
 import {
   CoreButton,
@@ -43,6 +43,7 @@ export function MessagesSurface() {
   const [peerXKey, setPeerXKey] = useState('');
   const [e2e, setE2e] = useState(false);
   const [text, setText] = useState('');
+  const [busy, setBusy] = useState(false);
   const [decrypted, setDecrypted] = useState<Record<string, string>>({});
   const ownDids = state.identities.map((identity) => identity.did);
   const directRooms = state.rooms.filter(
@@ -80,24 +81,116 @@ export function MessagesSurface() {
       )
     : [];
 
+  const resolveRecipient = async () => {
+    if (!recipientDid.startsWith('did:key:')) {
+      state.notify('Enter a valid did:key recipient first.', 'error');
+      return null;
+    }
+    if (!state.protocol.connected) {
+      state.notify('Technocore is not connected.', 'error');
+      return null;
+    }
+    setBusy(true);
+    try {
+      const profile = await new HttpTechnocoreAdapter(
+        state.protocol,
+      ).resolveProfile(recipientDid.trim());
+      if (!profile?.mailbox) {
+        state.notify('No published Technocore mailbox was found.', 'error');
+        return null;
+      }
+      setMailbox(profile.mailbox);
+      if (profile.x25519PublicKey) setPeerXKey(profile.x25519PublicKey);
+      state.notify('Mailbox resolved from the Technocore DID note.', 'success');
+      return profile;
+    } catch (error) {
+      state.notify(
+        error instanceof Error ? error.message : 'Mailbox resolution failed.',
+        'error',
+      );
+      return null;
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  const syncMailbox = async () => {
+    if (!activeIdentity?.mailbox)
+      return state.notify('This identity has no mailbox address.', 'error');
+    if (!state.protocol.connected)
+      return state.notify('Technocore is not connected.', 'error');
+    setBusy(true);
+    try {
+      const name = activeIdentity.mailbox;
+      const roomId = `tc_${name}`;
+      state.addRoom({
+        id: roomId,
+        name,
+        kind: name.startsWith('mb-p-') ? 'private-mailbox' : 'mailbox',
+        topic: `Signed mailbox for ${shortDid(activeIdentity.did)}`,
+        source: 'technocore',
+        createdAt: new Date().toISOString(),
+        ownerDid: activeIdentity.did,
+        bookmarked: true,
+        messageCount: 0,
+        signedPercent: 0,
+      });
+      const messages = await new HttpTechnocoreAdapter(state.protocol).readRoom(
+        name,
+      );
+      state.mergeProtocolMessages(
+        roomId,
+        messages.map((message) => ({
+          ...message,
+          recipientDid: activeIdentity.did,
+          encrypted:
+            message.text.startsWith('{"v":1,"alg":') ||
+            message.text.startsWith('e2e1 '),
+        })),
+      );
+      state.notify(
+        `${messages.length} mailbox messages synchronized.`,
+        'success',
+      );
+    } catch (error) {
+      state.notify(
+        error instanceof Error ? error.message : 'Mailbox sync failed.',
+        'error',
+      );
+    } finally {
+      setBusy(false);
+    }
+  };
+
   const send = async () => {
     if (!activeIdentity)
       return state.notify('Create or import an identity first.', 'error');
     const signingKey = state.unlockedKeys[activeIdentity.id];
     if (!signingKey)
       return state.notify('Unlock the signing identity in Vault.', 'error');
-    if (!recipientDid.startsWith('did:key:') || !mailbox.startsWith('mb-'))
+    if (!state.protocol.connected)
+      return state.notify('Technocore is not connected.', 'error');
+    let targetMailbox = mailbox.trim();
+    if (!targetMailbox && recipientDid.startsWith('did:key:')) {
+      const profile = await resolveRecipient();
+      targetMailbox = profile?.mailbox || '';
+    }
+    if (
+      !recipientDid.startsWith('did:key:') ||
+      !targetMailbox.startsWith('mb-')
+    )
       return state.notify(
         'A did:key recipient and mailbox address are required.',
         'error',
       );
-    let room = state.rooms.find((item) => item.name === mailbox);
+    let room = state.rooms.find((item) => item.name === targetMailbox);
     if (!room)
       room = state.createRoom(
-        mailbox.replace(/^mb-p-|^mb-/, ''),
-        mailbox.startsWith('mb-p-') ? 'private-mailbox' : 'mailbox',
+        targetMailbox.replace(/^mb-p-|^mb-/, ''),
+        targetMailbox.startsWith('mb-p-') ? 'private-mailbox' : 'mailbox',
         `Direct mailbox for ${shortDid(recipientDid)}`,
         activeIdentity.did,
+        'technocore',
       );
     let payload = text.trim();
     if (e2e) {
@@ -117,32 +210,73 @@ export function MessagesSurface() {
         );
       }
     }
-    const base = {
-      roomId: room.id,
-      from: activeIdentity.did,
-      recipientDid,
-      text: payload,
-      createdAt: new Date().toISOString(),
-      seq: String(new Date().getTime()),
-      nonce: crypto.randomUUID(),
-      inReplyTo: undefined,
-    };
-    const message: ProtocolMessage = {
-      id: randomId('dm'),
-      ...base,
-      signature: signMessage(base, signingKey),
-      verified: true,
-      encrypted: e2e,
-    };
-    state.addMessage(message);
+    const priorNonce = state.messages
+      .filter(
+        (message) =>
+          message.roomId === room.id &&
+          message.from === activeIdentity.did &&
+          /^[0-9]{1,19}$/u.test(message.nonce),
+      )
+      .reduce(
+        (highest, message) =>
+          BigInt(message.nonce) > highest ? BigInt(message.nonce) : highest,
+        BigInt(0),
+      );
+    const clock = BigInt(Date.now());
+    const nonce = (
+      clock > priorNonce ? clock : priorNonce + BigInt(1)
+    ).toString();
+    const signed = signTechnocoreMessage(
+      targetMailbox,
+      nonce,
+      payload,
+      signingKey,
+    );
+    setBusy(true);
+    try {
+      const received = await new HttpTechnocoreAdapter(
+        state.protocol,
+      ).sendSignedMessage(targetMailbox, {
+        id: `pending_${nonce}`,
+        roomId: room.id,
+        from: activeIdentity.did,
+        recipientDid,
+        text: signed.text,
+        createdAt: new Date().toISOString(),
+        seq: nonce,
+        nonce,
+        signature: signed.signature,
+        verified: true,
+        encrypted: e2e,
+      });
+      state.mergeProtocolMessages(
+        room.id,
+        received.map((message) => ({
+          ...message,
+          recipientDid:
+            message.from === activeIdentity.did
+              ? recipientDid
+              : activeIdentity.did,
+          encrypted: e2e || message.text.startsWith('e2e1 '),
+        })),
+      );
+    } catch (error) {
+      state.notify(
+        error instanceof Error ? error.message : 'Technocore DM failed.',
+        'error',
+      );
+      return;
+    } finally {
+      setBusy(false);
+    }
     state.acceptMessageDid(recipientDid);
     setSelectedDid(recipientDid);
     setComposeOpen(false);
     setText('');
     state.notify(
       e2e
-        ? 'End-to-end encrypted signed message created.'
-        : 'Signed private message created.',
+        ? 'End-to-end encrypted signed message sent through Technocore.'
+        : 'Signed private message sent through Technocore.',
       'success',
     );
   };
@@ -154,13 +288,23 @@ export function MessagesSurface() {
         title={'SIGNED\nMESSAGES'}
         subtitle="Mailbox-based direct messages, local requests and optional X25519 E2E privacy."
         action={
-          <CoreButton
-            onClick={() => setComposeOpen(true)}
-            disabled={!state.identities.length}
-          >
-            <Plus size={13} />
-            NEW MESSAGE
-          </CoreButton>
+          <div className="action-row">
+            <CoreButton
+              variant="outline"
+              onClick={syncMailbox}
+              disabled={busy || !state.identities.length}
+            >
+              <RefreshCw className={busy ? 'spin' : ''} size={13} />
+              SYNC MAILBOX
+            </CoreButton>
+            <CoreButton
+              onClick={() => setComposeOpen(true)}
+              disabled={!state.identities.length}
+            >
+              <Plus size={13} />
+              NEW MESSAGE
+            </CoreButton>
+          </div>
         }
       />
       <ProtocolStrip
@@ -340,6 +484,16 @@ export function MessagesSurface() {
               placeholder="mb-p-…"
             />
           </Field>
+          <div className="action-row full">
+            <CoreButton
+              variant="outline"
+              onClick={resolveRecipient}
+              disabled={busy || !recipientDid}
+            >
+              <RefreshCw className={busy ? 'spin' : ''} size={12} />
+              RESOLVE FROM DID NOTE
+            </CoreButton>
+          </div>
           <label className="check-row full">
             <input
               type="checkbox"
@@ -370,7 +524,7 @@ export function MessagesSurface() {
                 : 'Message is signed but not content-encrypted.'}
             </p>
           </div>
-          <CoreButton onClick={send} disabled={!text.trim()}>
+          <CoreButton onClick={send} disabled={busy || !text.trim()}>
             <Send size={13} />
             {e2e ? 'ENCRYPT & SIGN' : 'SIGN & SEND'}
           </CoreButton>

@@ -6,50 +6,139 @@ import type {
   Room,
   RuntimeConnection,
 } from './domain';
-import { redactSecrets } from './crypto';
+import {
+  base64ToBytes,
+  base64UrlToBytes,
+  bytesToBase64,
+  bytesToBase64Url,
+  normalizeTechnocoreText,
+  redactSecrets,
+  signTechnocoreNote,
+  technocoreDidFingerprint,
+  verifyTechnocoreMessage,
+} from './crypto';
 
-const RoomSchema = z.object({
-  id: z.string().optional(),
-  name: z.string(),
-  kind: z
-    .enum([
-      'public',
-      'private',
-      'mailbox',
-      'private-mailbox',
-      'owned',
-      'ephemeral',
-      'private-ephemeral',
-    ])
-    .default('public'),
-  topic: z.string().default(''),
-  createdAt: z.string().optional(),
-  ownerDid: z.string().optional(),
-  messageCount: z.number().optional(),
-  signedPercent: z.number().optional(),
-});
-const MessageSchema = z.object({
-  id: z.string().optional(),
-  roomId: z.string().optional(),
-  room: z.string().optional(),
+const TechnocoreMessageSchema = z.object({
   from: z.string(),
   text: z.string(),
-  createdAt: z.string().optional(),
-  seq: z.union([z.string(), z.number()]).optional(),
-  nonce: z.string().optional(),
-  signature: z.string().optional(),
+  ts: z.string(),
+  seq: z.union([z.string(), z.number()]),
+  nonce: z.union([z.string(), z.number()]).optional(),
   sig: z.string().optional(),
-  verified: z.boolean().optional(),
 });
+const TechnocoreRoomReadSchema = z.object({
+  room: z.string(),
+  count: z.number(),
+  first_seq: z.union([z.string(), z.number(), z.null()]).optional(),
+  last_seq: z.union([z.string(), z.number()]),
+  messages: z.array(TechnocoreMessageSchema),
+});
+const TechnocoreConfigSchema = z.object({
+  service: z.string(),
+  version: z.string(),
+  settings: z.object({
+    rate_read: z.number(),
+    rate_write: z.number(),
+    max_wait: z.number(),
+    dupe_filter_seconds: z.number(),
+    ephemeral_ttl_seconds: z.number(),
+  }),
+});
+const TechnocoreAgentSchema = z.object({
+  name: z.string(),
+  version: z.string(),
+  url: z.url(),
+  limits: z.object({
+    reads_per_minute_per_ip: z.number(),
+    writes_per_minute_per_ip: z.number(),
+    retention_seconds: z.number(),
+    ephemeral_ttl_seconds: z.number(),
+    duplicate_filter_seconds: z.number(),
+    long_poll_seconds: z.number(),
+  }),
+});
+
+const roomNamePattern = /^[a-z0-9][a-z0-9_-]{0,47}$/u;
+
+function roomKindFromName(name: string): Room['kind'] {
+  if (name.startsWith('mb-p-')) return 'private-mailbox';
+  if (name.startsWith('e-p-')) return 'private-ephemeral';
+  if (name.startsWith('p-')) return 'private';
+  if (name.startsWith('mb-')) return 'mailbox';
+  if (name.startsWith('d-')) return 'owned';
+  if (name.startsWith('e-')) return 'ephemeral';
+  return 'public';
+}
+
+function parseJsonPreservingNonce(raw: string): unknown {
+  return JSON.parse(
+    raw.replace(/("nonce"\s*:\s*)([0-9]{1,19})(?=\s*[,}])/gu, '$1"$2"'),
+  );
+}
+
+function mapRoomRead(room: string, value: unknown): ProtocolMessage[] {
+  const parsed = TechnocoreRoomReadSchema.parse(value);
+  return parsed.messages.map((message) => {
+    const nonce = message.nonce === undefined ? '' : String(message.nonce);
+    const signature = message.sig;
+    return {
+      id: `tcmsg_${room}_${String(message.seq)}`,
+      roomId: `tc_${room}`,
+      from: message.from,
+      text: message.text,
+      createdAt: message.ts,
+      seq: String(message.seq),
+      nonce,
+      signature,
+      verified: Boolean(
+        signature &&
+        nonce &&
+        verifyTechnocoreMessage(
+          room,
+          nonce,
+          message.text,
+          signature,
+          message.from,
+        ),
+      ),
+    };
+  });
+}
 
 export interface TechnocoreAdapter {
   listRooms(): Promise<Room[]>;
   readRoom(room: string, since?: string): Promise<ProtocolMessage[]>;
-  sendSignedMessage(room: string, message: ProtocolMessage): Promise<void>;
+  waitForRoom(
+    room: string,
+    since: string,
+    waitSeconds?: number,
+  ): Promise<ProtocolMessage[]>;
+  sendSignedMessage(
+    room: string,
+    message: ProtocolMessage,
+  ): Promise<ProtocolMessage[]>;
   getNote(namespace: string, key: string): Promise<string | null>;
-  createOwnedRoom(room: Room): Promise<void>;
+  setNote(namespace: string, key: string, value: string): Promise<void>;
+  resolveProfile(did: string): Promise<TechnocoreProfile | null>;
+  publishProfile(
+    did: string,
+    mailbox: string,
+    x25519PublicKey?: string,
+  ): Promise<void>;
+  claimOwnedRoom(
+    room: string,
+    did: string,
+    secretKey: Uint8Array,
+  ): Promise<void>;
   exportRoom(room: string): Promise<string>;
   getConfig(): Promise<ProtocolConfig>;
+}
+
+export interface TechnocoreProfile {
+  did: string;
+  mailbox?: string;
+  x25519PublicKey?: string;
+  noteAddress: string;
 }
 
 async function checkedFetch(
@@ -67,7 +156,15 @@ async function checkedFetch(
       signal: controller.signal,
       headers,
     });
-    if (!response.ok) throw new Error(`HTTP ${response.status}`);
+    if (!response.ok) {
+      const detail = redactSecrets(
+        (await response.text()).split('\n')[0] || '',
+      );
+      const retry = response.headers.get('retry-after');
+      throw new Error(
+        `Technocore HTTP ${response.status}${detail ? ` — ${detail.slice(0, 180)}` : ''}${retry ? ` · retry in ${retry}s` : ''}`,
+      );
+    }
     return response;
   } finally {
     clearTimeout(timer);
@@ -75,6 +172,8 @@ async function checkedFetch(
 }
 
 export class HttpTechnocoreAdapter implements TechnocoreAdapter {
+  private pollCounter = 0;
+
   constructor(private readonly config: ProtocolConfig) {
     if (!config.baseUrl || !/^https?:\/\//.test(config.baseUrl))
       throw new Error('A valid HTTP protocol endpoint is required.');
@@ -83,98 +182,234 @@ export class HttpTechnocoreAdapter implements TechnocoreAdapter {
     return `${this.config.baseUrl.replace(/\/$/, '')}${path}`;
   }
   async listRooms(): Promise<Room[]> {
-    const json = await (await checkedFetch(this.url('/rooms'))).json();
-    const parsed = z
-      .array(RoomSchema)
-      .parse(Array.isArray(json) ? json : (json as { rooms?: unknown }).rooms);
-    return parsed.map((room) => ({
-      id: room.id || `tc_${room.name}`,
-      name: room.name,
-      kind: room.kind,
-      topic: room.topic,
-      source: 'technocore',
-      createdAt: room.createdAt || new Date().toISOString(),
-      ownerDid: room.ownerDid,
-      bookmarked: false,
-      messageCount: room.messageCount || 0,
-      signedPercent: room.signedPercent || 0,
-    }));
+    const response = await checkedFetch(this.url('/rooms'), {
+      headers: { accept: 'text/plain' },
+    });
+    const text = await response.text();
+    return text
+      .split('\n')
+      .filter((line) => line.startsWith('/r/'))
+      .map((line): Room | null => {
+        const separator = line.indexOf('  · ');
+        const record = separator >= 0 ? line.slice(0, separator) : line;
+        const topic = separator >= 0 ? line.slice(separator + 4).trim() : '';
+        const match = record.match(/^\/r\/(\S+)\s+seq\s+([0-9]+)\s+/u);
+        if (!match || !roomNamePattern.test(match[1])) return null;
+        const name = match[1];
+        return {
+          id: `tc_${name}`,
+          name,
+          kind: roomKindFromName(name),
+          topic,
+          source: 'technocore',
+          createdAt: new Date().toISOString(),
+          bookmarked: false,
+          messageCount: Number(match[2]),
+          signedPercent: 0,
+        };
+      })
+      .filter((room): room is Room => Boolean(room));
+  }
+  private async readRoomWindow(
+    room: string,
+    options: { since?: string; waitSeconds?: number } = {},
+  ): Promise<ProtocolMessage[]> {
+    if (!roomNamePattern.test(room))
+      throw new Error('Invalid Technocore room.');
+    const query = new URLSearchParams({ format: 'json', limit: '50' });
+    if (options.since) query.set('since', options.since);
+    if (options.waitSeconds !== undefined) {
+      if (!options.since)
+        throw new Error('Technocore long polling requires a sequence cursor.');
+      const maximum = Math.min(this.config.maxWaitSeconds || 10, 10);
+      const wait = Math.max(
+        1,
+        Math.min(Math.floor(options.waitSeconds), maximum),
+      );
+      query.set('wait', String(wait));
+      this.pollCounter += 1;
+      query.set('n', String(this.pollCounter));
+    }
+    const raw = await (
+      await checkedFetch(
+        this.url(`/r/${encodeURIComponent(room)}?${query.toString()}`),
+      )
+    ).text();
+    return mapRoomRead(room, parseJsonPreservingNonce(raw));
   }
   async readRoom(room: string, since?: string): Promise<ProtocolMessage[]> {
-    const query = since ? `?since=${encodeURIComponent(since)}` : '';
-    const json = await (
-      await checkedFetch(
-        this.url(`/rooms/${encodeURIComponent(room)}/messages${query}`),
-      )
-    ).json();
-    const parsed = z
-      .array(MessageSchema)
-      .parse(
-        Array.isArray(json) ? json : (json as { messages?: unknown }).messages,
-      );
-    return parsed.map((message, index) => ({
-      id: message.id || `tcmsg_${message.seq || index}`,
-      roomId: message.roomId || message.room || room,
-      from: message.from,
-      text: message.text,
-      createdAt: message.createdAt || new Date().toISOString(),
-      seq: String(message.seq || index),
-      nonce: message.nonce || '',
-      signature: message.signature || message.sig,
-      verified: Boolean(message.verified),
-    }));
+    return this.readRoomWindow(room, { since });
+  }
+  async waitForRoom(
+    room: string,
+    since: string,
+    waitSeconds = 10,
+  ): Promise<ProtocolMessage[]> {
+    if (!/^[0-9]+$/u.test(since))
+      throw new Error('Technocore sequence cursor must contain digits.');
+    return this.readRoomWindow(room, { since, waitSeconds });
   }
   async sendSignedMessage(
     room: string,
     message: ProtocolMessage,
-  ): Promise<void> {
-    await checkedFetch(
-      this.url(`/rooms/${encodeURIComponent(room)}/messages`),
-      {
-        method: 'POST',
-        headers: { 'content-type': 'application/json' },
-        body: JSON.stringify(message),
-      },
-    );
+  ): Promise<ProtocolMessage[]> {
+    if (!roomNamePattern.test(room))
+      throw new Error('Invalid Technocore room.');
+    if (!message.signature)
+      throw new Error('A Technocore signature is required.');
+    if (!/^[0-9]{1,19}$/u.test(message.nonce))
+      throw new Error('Technocore nonce must contain 1–19 digits.');
+    const text = normalizeTechnocoreText(message.text);
+    const path = `/r/${encodeURIComponent(room)}/say-signed/${encodeURIComponent(message.from)}/${encodeURIComponent(message.signature)}/${message.nonce}/${encodeURIComponent(text)}?format=json`;
+    const target = this.url(path);
+    if (new TextEncoder().encode(target).length > 14_000)
+      throw new Error(
+        'This message is too large for Technocore’s browser-safe GET lane. Shorten it and try again.',
+      );
+    const response = await checkedFetch(target);
+    const raw = await response.text();
+    if (response.headers.get('content-type')?.includes('application/json'))
+      return mapRoomRead(room, parseJsonPreservingNonce(raw));
+    return this.readRoom(room);
   }
   async getNote(namespace: string, key: string): Promise<string | null> {
-    const response = await checkedFetch(
+    if (!roomNamePattern.test(namespace) || !roomNamePattern.test(key))
+      throw new Error('Invalid Technocore note address.');
+    const response = await fetch(
       this.url(
-        `/notes/${encodeURIComponent(namespace)}/${encodeURIComponent(key)}`,
+        `/kv/${encodeURIComponent(namespace)}/${encodeURIComponent(key)}`,
       ),
+      { headers: { accept: 'text/plain' } },
     );
-    const body = (await response.json()) as { value?: string | null };
-    return body.value ?? null;
+    if (response.status === 404) return null;
+    if (!response.ok) throw new Error(`Technocore HTTP ${response.status}`);
+    const value = await response.text();
+    return value || null;
   }
-  async createOwnedRoom(room: Room): Promise<void> {
-    await checkedFetch(this.url('/rooms'), {
-      method: 'POST',
-      headers: { 'content-type': 'application/json' },
-      body: JSON.stringify(room),
-    });
+  async setNote(
+    namespace: string,
+    key: string,
+    rawValue: string,
+  ): Promise<void> {
+    if (!roomNamePattern.test(namespace) || !roomNamePattern.test(key))
+      throw new Error('Invalid Technocore note address.');
+    const value = normalizeTechnocoreText(rawValue);
+    if (!value) throw new Error('Technocore note value is required.');
+    if (Array.from(value).length > 8192)
+      throw new Error('Technocore notes are limited to 8192 characters.');
+    const target = this.url(
+      `/kv/${encodeURIComponent(namespace)}/${encodeURIComponent(key)}/set/${encodeURIComponent(value)}`,
+    );
+    if (new TextEncoder().encode(target).length > 14_000)
+      throw new Error('This note is too large for the browser-safe GET lane.');
+    await checkedFetch(target, { headers: { accept: 'text/plain' } });
+  }
+  async resolveProfile(did: string): Promise<TechnocoreProfile | null> {
+    const fingerprint = technocoreDidFingerprint(did);
+    const shard = fingerprint.slice(0, 2);
+    const key = fingerprint.slice(2);
+    const sharded = await this.getNote(`did-${shard}`, key);
+    const value = sharded || (await this.getNote('did', fingerprint));
+    if (!value) return null;
+    const tokens = value.split(/\s+/u);
+    if (tokens[0] !== did) throw new Error('Technocore profile DID mismatch.');
+    const mailbox = tokens
+      .find((token) => token.startsWith('mailbox:'))
+      ?.slice('mailbox:'.length);
+    const x25519 = tokens
+      .find((token) => token.startsWith('x25519:'))
+      ?.slice('x25519:'.length);
+    let x25519PublicKey: string | undefined;
+    try {
+      if (x25519) {
+        const decoded = base64UrlToBytes(x25519);
+        if (decoded.length === 32) x25519PublicKey = bytesToBase64(decoded);
+      }
+    } catch {
+      x25519PublicKey = undefined;
+    }
+    return {
+      did,
+      mailbox: mailbox && roomNamePattern.test(mailbox) ? mailbox : undefined,
+      x25519PublicKey,
+      noteAddress: `/kv/did-${shard}/${key}`,
+    };
+  }
+  async publishProfile(
+    did: string,
+    mailbox: string,
+    x25519PublicKey?: string,
+  ): Promise<void> {
+    if (!did.startsWith('did:key:z6Mk'))
+      throw new Error('An Ed25519 did:key is required.');
+    if (!mailbox.startsWith('mb-') || !roomNamePattern.test(mailbox))
+      throw new Error('A signed Technocore mailbox is required.');
+    const fingerprint = technocoreDidFingerprint(did);
+    const profile = [
+      did,
+      x25519PublicKey
+        ? `x25519:${bytesToBase64Url(base64ToBytes(x25519PublicKey))}`
+        : '',
+      `mailbox:${mailbox}`,
+    ]
+      .filter(Boolean)
+      .join(' ');
+    await this.setNote(
+      `did-${fingerprint.slice(0, 2)}`,
+      fingerprint.slice(2),
+      profile,
+    );
+  }
+  async claimOwnedRoom(
+    room: string,
+    did: string,
+    secretKey: Uint8Array,
+  ): Promise<void> {
+    if (!/^d-[a-z0-9][a-z0-9_-]{0,45}$/u.test(room))
+      throw new Error('Only d-* Technocore rooms can be owned.');
+    const nonce = Date.now().toString();
+    const signed = signTechnocoreNote(
+      'room-owners',
+      room,
+      nonce,
+      did,
+      secretKey,
+    );
+    const target = this.url(
+      `/kv/room-owners/${encodeURIComponent(room)}/set-signed/${encodeURIComponent(did)}/${encodeURIComponent(signed.signature)}/${nonce}/${encodeURIComponent(signed.value)}?if_absent=1`,
+    );
+    await checkedFetch(target, { headers: { accept: 'text/plain' } });
   }
   async exportRoom(room: string): Promise<string> {
+    if (!roomNamePattern.test(room))
+      throw new Error('Invalid Technocore room.');
     return (
-      await checkedFetch(
-        this.url(`/rooms/${encodeURIComponent(room)}/export`),
-        { headers: { accept: 'text/plain' } },
-      )
+      await checkedFetch(this.url(`/r/${encodeURIComponent(room)}/export`), {
+        headers: { accept: 'application/x-ndjson' },
+      })
     ).text();
   }
   async getConfig(): Promise<ProtocolConfig> {
-    const body = (await (
-      await checkedFetch(this.url('/config'))
-    ).json()) as Partial<ProtocolConfig>;
+    const [configResponse, agentResponse] = await Promise.all([
+      checkedFetch(this.url('/config')),
+      checkedFetch(this.url('/.well-known/agent.json')),
+    ]);
+    const config = TechnocoreConfigSchema.parse(await configResponse.json());
+    const agent = TechnocoreAgentSchema.parse(await agentResponse.json());
     return {
       ...this.config,
-      readBudget: Number(body.readBudget || this.config.readBudget),
-      writeBudget: Number(body.writeBudget || this.config.writeBudget),
-      retryAfterMs: Number(body.retryAfterMs || this.config.retryAfterMs),
-      duplicateWindowMs: Number(
-        body.duplicateWindowMs || this.config.duplicateWindowMs,
-      ),
+      baseUrl: agent.url.replace(/\/$/u, ''),
+      readBudget: agent.limits.reads_per_minute_per_ip,
+      writeBudget: agent.limits.writes_per_minute_per_ip,
+      retryAfterMs: 0,
+      duplicateWindowMs: config.settings.dupe_filter_seconds * 1000,
+      maxWaitSeconds: agent.limits.long_poll_seconds,
+      retentionSeconds: agent.limits.retention_seconds,
+      ephemeralTtlSeconds: agent.limits.ephemeral_ttl_seconds,
+      serviceVersion: agent.version,
+      connectedAt: new Date().toISOString(),
       connected: true,
-      sourceLabel: body.sourceLabel || 'TECHNOCORE',
+      sourceLabel: `TECHNOCORE · ${agent.version}`,
     };
   }
 }

@@ -6,6 +6,7 @@ import {
   Download,
   Eye,
   EyeOff,
+  Globe2,
   Lock,
   LockOpen,
   Plus,
@@ -21,8 +22,8 @@ import {
   importRawIdentity,
   randomId,
 } from '@/lib/crypto';
-import type { Provider, RuntimeType } from '@/lib/domain';
-import { HttpAgentRuntime } from '@/lib/adapters';
+import type { Identity, Provider, RuntimeType } from '@/lib/domain';
+import { HttpAgentRuntime, HttpTechnocoreAdapter } from '@/lib/adapters';
 import { useCoreMesh } from '@/lib/store';
 import {
   CopyButton,
@@ -164,6 +165,45 @@ export function VaultSurface() {
       setBusy(false);
     }
   };
+  const publishProfile = async (identity: Identity) => {
+    if (!state.protocol.connected)
+      return state.notify('Technocore is not connected.', 'error');
+    if (!identity.mailbox)
+      return state.notify('This identity has no mailbox address.', 'error');
+    setBusy(true);
+    try {
+      await new HttpTechnocoreAdapter(state.protocol).publishProfile(
+        identity.did,
+        identity.mailbox,
+        identity.x25519PublicKey,
+      );
+      state.addRoom({
+        id: `tc_${identity.mailbox}`,
+        name: identity.mailbox,
+        kind: identity.mailbox.startsWith('mb-p-')
+          ? 'private-mailbox'
+          : 'mailbox',
+        topic: `Signed mailbox for ${shortDid(identity.did)}`,
+        source: 'technocore',
+        createdAt: new Date().toISOString(),
+        ownerDid: identity.did,
+        bookmarked: true,
+        messageCount: 0,
+        signedPercent: 0,
+      });
+      state.notify(
+        'Public DID note published with mailbox and X25519 public key.',
+        'success',
+      );
+    } catch (error) {
+      state.notify(
+        error instanceof Error ? error.message : 'Profile publish failed.',
+        'error',
+      );
+    } finally {
+      setBusy(false);
+    }
+  };
 
   return (
     <>
@@ -268,6 +308,15 @@ export function VaultSurface() {
                 >
                   <Eye size={12} />
                   RAW
+                </CoreButton>
+                <CoreButton
+                  variant="outline"
+                  onClick={() => publishProfile(identity)}
+                  disabled={busy || !identity.mailbox}
+                  title="Publishes public DID, mailbox and X25519 public-key data to Technocore"
+                >
+                  <Globe2 size={12} />
+                  PUBLISH PROFILE
                 </CoreButton>
               </div>
             </article>

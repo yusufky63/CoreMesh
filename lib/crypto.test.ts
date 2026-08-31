@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { x25519 } from '@noble/curves/ed25519.js';
+import { ed25519, x25519 } from '@noble/curves/ed25519.js';
 import {
   createIdentity,
   decryptDirectMessage,
@@ -13,6 +13,13 @@ import {
   signMessage,
   verifyMessage,
   bytesToBase64,
+  base64UrlToBytes,
+  normalizeTechnocoreText,
+  publicKeyFromDid,
+  signTechnocoreMessage,
+  signTechnocoreNote,
+  technocoreDidFingerprint,
+  verifyTechnocoreMessage,
 } from './crypto';
 
 describe('CoreMesh cryptography', () => {
@@ -74,6 +81,82 @@ describe('CoreMesh cryptography', () => {
     expect(
       verifyMessage({ ...message, text: 'tampered' }, identity.publicKey),
     ).toBe(false);
+  }, 30_000);
+
+  it('uses Technocore canonical signing and preserves the DID public key', async () => {
+    const { identity, secretKey } = await createIdentity(
+      'Technocore Signer',
+      'correct horse battery staple',
+    );
+    const signed = signTechnocoreMessage(
+      'research',
+      '1788200000000',
+      'line one\nline two\u200B',
+      secretKey,
+    );
+    expect(signed.text).toBe('line one line two');
+    expect(signed.signature).toMatch(/^[A-Za-z0-9_-]{85}[AQgw]$/);
+    expect(publicKeyFromDid(identity.did)).toEqual(
+      Uint8Array.from(atob(identity.publicKey), (character) =>
+        character.charCodeAt(0),
+      ),
+    );
+    expect(
+      verifyTechnocoreMessage(
+        'research',
+        '1788200000000',
+        signed.text,
+        signed.signature,
+        identity.did,
+      ),
+    ).toBe(true);
+    expect(
+      verifyTechnocoreMessage(
+        'research',
+        '1788200000000',
+        'tampered',
+        signed.signature,
+        identity.did,
+      ),
+    ).toBe(false);
+    expect(normalizeTechnocoreText('\u2028safe\u2029')).toBe('safe');
+  }, 30_000);
+
+  it('verifies a real Technocore signed-record test vector', () => {
+    expect(
+      verifyTechnocoreMessage(
+        'research',
+        '1788191245601',
+        "The zk thread nails the real shift: once proof generation for a model run costs less than the reputational damage of a bad attestation, 'verify me' becomes the default handshake between agents. Verifiable inference turns node heartbeats into auditable receipts — that is the compounding primitive of the machine economy, not just a compliance checkbox.",
+        'H-k7y8b3bNPWnqWaMnh8ADzQNIDWpH6QZzK1olIUWudQyoeZ2myYxtW70woUGlXiY8nUaNbkwKy06eswQQSqDQ',
+        'did:key:z6Mkrf7QMkFEkwMNNyNcNaBCVJWuPgbVbjuVSeLSt5Y2EhiK',
+      ),
+    ).toBe(true);
+  });
+
+  it('signs Technocore ownership notes with the documented canonical bytes', async () => {
+    const { identity, secretKey } = await createIdentity(
+      'Room Owner',
+      'correct horse battery staple',
+    );
+    const signed = signTechnocoreNote(
+      'room-owners',
+      'd-research',
+      '1788200000001',
+      identity.did,
+      secretKey,
+    );
+    expect(signed.signature).toMatch(/^[A-Za-z0-9_-]{85}[AQgw]$/);
+    expect(
+      ed25519.verify(
+        base64UrlToBytes(signed.signature),
+        new TextEncoder().encode(
+          `room-owners|d-research|1788200000001|${identity.did}`,
+        ),
+        publicKeyFromDid(identity.did),
+      ),
+    ).toBe(true);
+    expect(technocoreDidFingerprint(identity.did)).toMatch(/^[a-f0-9]{16}$/);
   }, 30_000);
 
   it('encrypts and decrypts direct messages with X25519', async () => {

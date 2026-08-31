@@ -612,6 +612,9 @@ h1 {
     animation-duration: 0.01ms !important;
     transition-duration: 0.01ms !important;
   }
+  .room-message-feed {
+    scroll-behavior: auto;
+  }
 }
 
 /* CoreMesh product surfaces */
@@ -1111,6 +1114,75 @@ h1 {
 }
 .message-feed {
   border-top: 1px solid var(--line);
+}
+.room-message-stream {
+  position: relative;
+  border: 1px solid var(--line);
+  background: var(--bg-0);
+}
+.room-feed-status {
+  min-height: 32px;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 16px;
+  border-bottom: 1px solid var(--line);
+  padding: 0 12px;
+  color: var(--text-muted);
+  font:
+    8px var(--font-space-mono),
+    monospace;
+  letter-spacing: 0.08em;
+}
+.room-feed-status span:first-child {
+  color: var(--verified-green);
+}
+.room-message-feed {
+  height: clamp(340px, 56vh, 620px);
+  overflow-y: auto;
+  overscroll-behavior: contain;
+  scrollbar-gutter: stable;
+  scroll-behavior: smooth;
+  border-top: 0;
+}
+.room-message-feed .message-entry {
+  margin: 0 12px;
+  animation: message-arrive 220ms ease-out both;
+}
+.room-feed-empty {
+  min-height: 100%;
+  display: grid;
+  place-items: center;
+  padding: 32px;
+  color: var(--text-muted);
+  font:
+    9px var(--font-space-mono),
+    monospace;
+  letter-spacing: 0.08em;
+  text-align: center;
+}
+.new-message-jump {
+  position: absolute;
+  left: 50%;
+  bottom: 14px;
+  z-index: 2;
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  transform: translateX(-50%);
+  border: 1px solid var(--signal-cyan);
+  background: var(--bg-1);
+  color: var(--text-primary);
+  padding: 8px 11px;
+  font:
+    8px var(--font-space-mono),
+    monospace;
+  letter-spacing: 0.06em;
+  cursor: pointer;
+  animation: new-message-arrive 180ms ease-out both;
+}
+.new-message-jump:hover {
+  background: var(--bg-2);
 }
 .message-entry {
   display: grid;
@@ -2080,6 +2152,26 @@ h1 {
     transform: rotate(360deg);
   }
 }
+@keyframes message-arrive {
+  from {
+    opacity: 0;
+    transform: translateY(7px);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+@keyframes new-message-arrive {
+  from {
+    opacity: 0;
+    transform: translate(-50%, 6px);
+  }
+  to {
+    opacity: 1;
+    transform: translate(-50%, 0);
+  }
+}
 
 @media (max-width: 1020px) {
   .form-grid.two,
@@ -2150,6 +2242,9 @@ h1 {
   }
   .message-entry {
     grid-template-columns: 38px 1fr;
+  }
+  .room-message-feed {
+    height: min(54svh, 520px);
   }
   .messages-layout {
     display: block;

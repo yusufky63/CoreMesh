@@ -223,6 +223,11 @@ export interface ProtocolConfig {
   writeBudget: number;
   retryAfterMs: number;
   duplicateWindowMs: number;
+  maxWaitSeconds: number;
+  retentionSeconds: number;
+  ephemeralTtlSeconds: number;
+  serviceVersion?: string;
+  connectedAt?: string;
   connected: boolean;
   sourceLabel: string;
 }

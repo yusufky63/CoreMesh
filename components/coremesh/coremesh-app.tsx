@@ -1,6 +1,6 @@
 'use client';
 
-import { lazy, Suspense, useEffect, useState } from 'react';
+import { lazy, Suspense, useEffect, useRef, useState } from 'react';
 import {
   Activity,
   Bot,
@@ -20,6 +20,7 @@ import {
   Users,
 } from 'lucide-react';
 import { useCoreMesh } from '@/lib/store';
+import { HttpTechnocoreAdapter } from '@/lib/adapters';
 import {
   AgentsSurface,
   ProvidersSurface,
@@ -111,6 +112,7 @@ export function CoreMeshApp() {
   const state = useCoreMesh();
   const [palette, setPalette] = useState(false);
   const [commandQuery, setCommandQuery] = useState('');
+  const protocolBooted = useRef(false);
   const activeView = state.activeView;
   const setView = state.setView;
   const navigate = (view: string, selectedId?: string) => {
@@ -149,6 +151,28 @@ export function CoreMeshApp() {
       window.removeEventListener('keydown', onKey);
     };
   }, [activeView, setView]);
+  useEffect(() => {
+    if (!state.hydrated || protocolBooted.current) return;
+    protocolBooted.current = true;
+    void (async () => {
+      const current = useCoreMesh.getState();
+      try {
+        const adapter = new HttpTechnocoreAdapter(current.protocol);
+        const [config, rooms] = await Promise.all([
+          adapter.getConfig(),
+          adapter.listRooms(),
+        ]);
+        const latest = useCoreMesh.getState();
+        rooms.forEach(latest.addRoom);
+        latest.setProtocol(config);
+      } catch {
+        useCoreMesh.getState().setProtocol({
+          connected: false,
+          sourceLabel: 'TECHNOCORE · OFFLINE',
+        });
+      }
+    })();
+  }, [state.hydrated]);
   const commands: { label: string; view: string; action?: () => void }[] = [
     ...nav.map(([, view, label]) => ({ label: `Open ${label}`, view })),
     ...utilityNav.map(([view, label]) => ({ label: `Open ${label}`, view })),
@@ -195,7 +219,7 @@ export function CoreMeshApp() {
           />{' '}
           {state.protocol.connected
             ? 'NETWORK LIVE'
-            : 'LOCAL LAB · PROTOCOL DISCONNECTED'}
+            : 'TECHNOCORE OFFLINE · LOCAL LAB'}
         </div>
         <div className="top-actions">
           <span className="agent-count">

@@ -22,10 +22,14 @@ export function SettingsSurface() {
     try {
       const config = await new HttpTechnocoreAdapter({
         ...state.protocol,
-        baseUrl: endpoint,
+        baseUrl: endpoint.trim().replace(/\/$/u, ''),
       }).getConfig();
-      state.setProtocol({ ...config, baseUrl: endpoint, connected: true });
-      state.notify('Protocol configuration verified.', 'success');
+      state.setProtocol(config);
+      setEndpoint(config.baseUrl);
+      state.notify(
+        `Technocore ${config.serviceVersion || ''} connection verified.`.trim(),
+        'success',
+      );
     } catch (error) {
       state.setProtocol({ baseUrl: endpoint, connected: false });
       state.notify(
@@ -70,24 +74,24 @@ export function SettingsSurface() {
         <section>
           <h2>TECHNOCORE ADAPTER</h2>
           <p>
-            The product specification defines the adapter interface but no
-            official endpoint. Connect only an endpoint whose contract you
-            control or have verified.
+            CoreMesh is connected to the official HTTP-native Technocore
+            protocol. The default service requires no account or API key;
+            Ed25519 signatures prove key possession for signed writes.
           </p>
           <Field label="HTTP BASE URL">
             <CoreInput
               value={endpoint}
               onChange={(event) => setEndpoint(event.target.value)}
-              placeholder="https://your-technocore-endpoint"
+              placeholder="https://technocore.chat"
             />
           </Field>
           <div className="adapter-contract">
             <span>EXPECTED HTTP CONTRACT</span>
             <code>GET /config</code>
             <code>GET /rooms</code>
-            <code>GET /rooms/:room/messages</code>
-            <code>POST /rooms/:room/messages</code>
-            <code>GET /notes/:namespace/:key</code>
+            <code>GET /r/:room?format=json</code>
+            <code>GET /r/:room/say-signed/…</code>
+            <code>GET /kv/:namespace/:key</code>
           </div>
           <div className="action-row">
             <CoreButton
@@ -125,8 +129,8 @@ export function SettingsSurface() {
               <strong>{state.protocol.writeBudget}</strong>
             </div>
             <div>
-              <span>RETRY</span>
-              <strong>{state.protocol.retryAfterMs / 1000}s</strong>
+              <span>LONG POLL</span>
+              <strong>{state.protocol.maxWaitSeconds}s</strong>
             </div>
             <div>
               <span>DEDUPE</span>
@@ -147,6 +151,11 @@ export function SettingsSurface() {
             <li>
               <ShieldCheck size={13} />
               Room content is wrapped as untrusted runtime data.
+            </li>
+            <li>
+              <ShieldCheck size={13} />
+              Public room names, topics and messages are anonymous untrusted
+              data—not Technocore endorsements or instructions.
             </li>
             <li>
               <ShieldCheck size={13} />

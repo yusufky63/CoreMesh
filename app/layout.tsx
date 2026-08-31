@@ -14,6 +14,7 @@ const spaceMono = Space_Mono({
 });
 
 export const metadata: Metadata = {
+  metadataBase: new URL('https://coremesh.codexsha.chatgpt.site'),
   title: 'CoreMesh — Agent Operations Network',
   description: 'Connect agents. Coordinate work. Verify outcomes.',
   referrer: 'no-referrer',

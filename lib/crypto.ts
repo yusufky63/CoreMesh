@@ -16,10 +16,22 @@ export const bytesToBase64 = (bytes: Uint8Array) => {
   for (const byte of bytes) binary += String.fromCharCode(byte);
   return btoa(binary);
 };
+export const bytesToBase64Url = (bytes: Uint8Array) =>
+  bytesToBase64(bytes)
+    .replaceAll('+', '-')
+    .replaceAll('/', '_')
+    .replace(/=+$/u, '');
 export const base64ToBytes = (value: string) => {
   const binary = atob(value);
   return Uint8Array.from(binary, (character) => character.charCodeAt(0));
 };
+export const base64UrlToBytes = (value: string) =>
+  base64ToBytes(
+    value
+      .replaceAll('-', '+')
+      .replaceAll('_', '/')
+      .padEnd(Math.ceil(value.length / 4) * 4, '='),
+  );
 
 export function base58Encode(bytes: Uint8Array): string {
   if (bytes.length === 0) return '';
@@ -46,11 +58,127 @@ export function base58Encode(bytes: Uint8Array): string {
   return output;
 }
 
+export function base58Decode(value: string): Uint8Array {
+  if (!value) return new Uint8Array();
+  let numeric = BigInt(0);
+  for (const character of value) {
+    const digit = BASE58_ALPHABET.indexOf(character);
+    if (digit < 0) throw new Error('Invalid base58btc value.');
+    numeric = numeric * BigInt(58) + BigInt(digit);
+  }
+  let hex = numeric.toString(16);
+  if (hex.length % 2) hex = `0${hex}`;
+  const decoded = numeric
+    ? Uint8Array.from(hex.match(/.{2}/gu) || [], (byte) =>
+        Number.parseInt(byte, 16),
+      )
+    : new Uint8Array();
+  const zeroes = value.match(/^1*/u)?.[0].length || 0;
+  const output = new Uint8Array(zeroes + decoded.length);
+  output.set(decoded, zeroes);
+  return output;
+}
+
 export function didFromPublicKey(publicKey: Uint8Array): string {
   const multicodec = new Uint8Array(2 + publicKey.length);
   multicodec.set([0xed, 0x01]);
   multicodec.set(publicKey, 2);
   return `did:key:z${base58Encode(multicodec)}`;
+}
+
+export function publicKeyFromDid(did: string): Uint8Array {
+  if (!did.startsWith('did:key:z'))
+    throw new Error('Technocore requires an Ed25519 did:key identity.');
+  const decoded = base58Decode(did.slice('did:key:z'.length));
+  if (decoded.length !== 34 || decoded[0] !== 0xed || decoded[1] !== 0x01)
+    throw new Error('Technocore requires an Ed25519 did:key identity.');
+  return decoded.slice(2);
+}
+
+export function normalizeTechnocoreText(value: string): string {
+  return value.replace(/[\p{Cc}\p{Cf}\p{Cs}\p{Co}\p{Zl}\p{Zp}]/gu, ' ').trim();
+}
+
+function technocoreSignaturePayload(
+  room: string,
+  nonce: string,
+  text: string,
+): Uint8Array {
+  return textEncoder.encode(`${room}|${nonce}|${text}`);
+}
+
+export function technocoreDidFingerprint(did: string): string {
+  return bytesToHex(sha256(textEncoder.encode(did))).slice(0, 16);
+}
+
+export function signTechnocoreMessage(
+  room: string,
+  nonce: string,
+  rawText: string,
+  secretKey: Uint8Array,
+): { text: string; signature: string } {
+  if (!/^[a-z0-9][a-z0-9_-]{0,47}$/u.test(room))
+    throw new Error('Invalid Technocore room name.');
+  if (!/^[0-9]{1,19}$/u.test(nonce))
+    throw new Error('Technocore nonce must contain 1–19 digits.');
+  const text = normalizeTechnocoreText(rawText);
+  if (!text) throw new Error('Message is empty after the single-line sweep.');
+  if (Array.from(text).length > 4096)
+    throw new Error('Technocore messages are limited to 4096 characters.');
+  return {
+    text,
+    signature: bytesToBase64Url(
+      ed25519.sign(technocoreSignaturePayload(room, nonce, text), secretKey),
+    ),
+  };
+}
+
+export function verifyTechnocoreMessage(
+  room: string,
+  nonce: string,
+  text: string,
+  signature: string,
+  did: string,
+): boolean {
+  try {
+    if (!/^[A-Za-z0-9_-]{85}[AQgw]$/u.test(signature)) return false;
+    return ed25519.verify(
+      base64UrlToBytes(signature),
+      technocoreSignaturePayload(room, nonce, text),
+      publicKeyFromDid(did),
+    );
+  } catch {
+    return false;
+  }
+}
+
+export function signTechnocoreNote(
+  namespace: string,
+  key: string,
+  nonce: string,
+  rawValue: string,
+  secretKey: Uint8Array,
+): { value: string; signature: string } {
+  if (!/^[a-z0-9][a-z0-9_-]{0,47}$/u.test(namespace))
+    throw new Error('Invalid Technocore note namespace.');
+  if (!/^[a-z0-9][a-z0-9_-]{0,47}$/u.test(key))
+    throw new Error('Invalid Technocore note key.');
+  if (!/^[0-9]{1,19}$/u.test(nonce))
+    throw new Error('Technocore nonce must contain 1–19 digits.');
+  const value = normalizeTechnocoreText(rawValue);
+  if (!value)
+    throw new Error('Note value is empty after the single-line sweep.');
+  if (Array.from(value).length > 8192)
+    throw new Error('Technocore notes are limited to 8192 characters.');
+  return {
+    value,
+    signature: bytesToBase64Url(
+      ed25519.sign(
+        textEncoder.encode(`${namespace}|${key}|${nonce}|${value}`),
+        secretKey,
+      ),
+    ),
+  };
 }
 
 async function deriveVaultKey(

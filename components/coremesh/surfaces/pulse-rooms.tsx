@@ -1,7 +1,8 @@
 'use client';
 
-import { useMemo, useState } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import {
+  ArrowDown,
   Bookmark,
   Eye,
   Filter,
@@ -13,8 +14,13 @@ import {
   Send,
   ShieldCheck,
 } from 'lucide-react';
-import { randomId, signMessage } from '@/lib/crypto';
-import type { ProtocolMessage, RoomKind } from '@/lib/domain';
+import {
+  normalizeTechnocoreText,
+  randomId,
+  signMessage,
+  signTechnocoreMessage,
+} from '@/lib/crypto';
+import type { ProtocolMessage, Room, RoomKind } from '@/lib/domain';
 import { roomKindLabel } from '@/lib/domain';
 import { HttpTechnocoreAdapter } from '@/lib/adapters';
 import { useCoreMesh } from '@/lib/store';
@@ -31,6 +37,27 @@ import {
   SectionHeader,
   shortDid,
 } from '../common';
+
+function nextTechnocoreNonce(
+  messages: ProtocolMessage[],
+  room: string,
+  did: string,
+) {
+  const last = messages
+    .filter(
+      (message) =>
+        message.roomId === `tc_${room}` &&
+        message.from === did &&
+        /^[0-9]{1,19}$/u.test(message.nonce),
+    )
+    .reduce(
+      (highest, message) =>
+        BigInt(message.nonce) > highest ? BigInt(message.nonce) : highest,
+      BigInt(0),
+    );
+  const clock = BigInt(Date.now());
+  return (clock > last ? clock : last + BigInt(1)).toString();
+}
 
 export function PulseSurface() {
   const {
@@ -205,6 +232,13 @@ export function RoomsSurface() {
   const [selectedRoomId, setSelectedRoomId] = useState(state.selectedId || '');
   const [messageText, setMessageText] = useState('');
   const [syncing, setSyncing] = useState(false);
+  const [roomLoading, setRoomLoading] = useState(false);
+  const [liveFeedState, setLiveFeedState] = useState<
+    'idle' | 'loading' | 'live' | 'retrying'
+  >('idle');
+  const [newMessageCount, setNewMessageCount] = useState(0);
+  const feedRef = useRef<HTMLDivElement>(null);
+  const isNearBottomRef = useRef(true);
   const selectedRoom = state.rooms.find((room) => room.id === selectedRoomId);
   const filtered = state.rooms.filter(
     (room) =>
@@ -220,15 +254,144 @@ export function RoomsSurface() {
           !state.blockedDids.includes(message.from),
       )
     : [];
+  const visibleRoomMessages = roomMessages.slice(-80);
   const activeIdentity = state.identities[0];
   const unlockedKey = activeIdentity
     ? state.unlockedKeys[activeIdentity.id]
     : undefined;
 
-  const createRoom = () => {
+  const scrollToLatest = useCallback((behavior: ScrollBehavior = 'smooth') => {
+    const feed = feedRef.current;
+    if (!feed) return;
+    feed.scrollTo({ top: feed.scrollHeight, behavior });
+    isNearBottomRef.current = true;
+    setNewMessageCount(0);
+  }, []);
+
+  useEffect(() => {
+    requestAnimationFrame(() => {
+      isNearBottomRef.current = true;
+      setNewMessageCount(0);
+      setLiveFeedState('idle');
+      scrollToLatest('auto');
+    });
+  }, [scrollToLatest, selectedRoomId]);
+
+  useEffect(() => {
+    const currentState = useCoreMesh.getState();
+    const liveRoom = currentState.rooms.find(
+      (room) => room.id === selectedRoomId,
+    );
+    if (
+      !liveRoom ||
+      liveRoom.source !== 'technocore' ||
+      !currentState.protocol.connected
+    )
+      return;
+
+    let cancelled = false;
+    const adapter = new HttpTechnocoreAdapter(currentState.protocol);
+    const pause = (milliseconds: number) =>
+      new Promise((resolve) => window.setTimeout(resolve, milliseconds));
+    const latestSequence = () =>
+      useCoreMesh
+        .getState()
+        .messages.filter(
+          (message) =>
+            message.roomId === liveRoom.id && /^\d+$/u.test(message.seq),
+        )
+        .reduce((highest, message) => {
+          const sequence = BigInt(message.seq);
+          return sequence > highest ? sequence : highest;
+        }, BigInt(0))
+        .toString();
+
+    const run = async () => {
+      let initial = latestSequence() === '0';
+      while (!cancelled) {
+        try {
+          setLiveFeedState(initial ? 'loading' : 'live');
+          const since = latestSequence();
+          const incoming = initial
+            ? await adapter.readRoom(liveRoom.name)
+            : await adapter.waitForRoom(
+                liveRoom.name,
+                since,
+                currentState.protocol.maxWaitSeconds,
+              );
+          if (cancelled) return;
+          initial = false;
+          if (incoming.length) {
+            const knownIds = new Set(
+              useCoreMesh.getState().messages.map((message) => message.id),
+            );
+            const freshCount = incoming.filter(
+              (message) => !knownIds.has(message.id),
+            ).length;
+            useCoreMesh.getState().mergeProtocolMessages(liveRoom.id, incoming);
+            requestAnimationFrame(() => {
+              if (isNearBottomRef.current) scrollToLatest();
+              else if (freshCount)
+                setNewMessageCount((count) => count + freshCount);
+            });
+          } else {
+            // A server may answer before holding the full poll window. Keep
+            // retries responsive without creating a tight request loop.
+            await pause(900);
+          }
+        } catch {
+          if (cancelled) return;
+          setLiveFeedState('retrying');
+          await pause(5_000);
+        }
+      }
+    };
+
+    void run();
+    return () => {
+      cancelled = true;
+    };
+  }, [
+    scrollToLatest,
+    selectedRoomId,
+    state.protocol.baseUrl,
+    state.protocol.connected,
+    state.protocol.maxWaitSeconds,
+  ]);
+
+  const loadRoom = async (room: Room) => {
+    setSelectedRoomId(room.id);
+    if (room.source !== 'technocore') return;
+    if (!state.protocol.connected) {
+      state.notify('Technocore is not connected yet.', 'error');
+      return;
+    }
+    setRoomLoading(true);
+    try {
+      const messages = await new HttpTechnocoreAdapter(state.protocol).readRoom(
+        room.name,
+      );
+      state.mergeProtocolMessages(room.id, messages);
+      requestAnimationFrame(() => scrollToLatest());
+    } catch (error) {
+      state.notify(
+        error instanceof Error ? error.message : 'Technocore room read failed.',
+        'error',
+      );
+    } finally {
+      setRoomLoading(false);
+    }
+  };
+
+  const createRoom = async () => {
     if (state.exploreMode || !activeIdentity)
       return state.notify(
         'Create or import an identity before writing.',
+        'error',
+      );
+    if (roomKind === 'owned' && !unlockedKey)
+      return state.notify(
+        'Unlock the signing identity before claiming a managed room.',
         'error',
       );
     const room = state.createRoom(
@@ -236,13 +399,51 @@ export function RoomsSurface() {
       roomKind,
       roomTopic,
       activeIdentity.did,
+      state.protocol.connected ? 'technocore' : 'local',
     );
+    if (state.protocol.connected) {
+      const adapter = new HttpTechnocoreAdapter(state.protocol);
+      if (roomKind === 'owned' && unlockedKey) {
+        try {
+          await adapter.claimOwnedRoom(
+            room.name,
+            activeIdentity.did,
+            unlockedKey,
+          );
+        } catch (error) {
+          state.addRoom({ ...room, source: 'local' });
+          state.notify(
+            `${error instanceof Error ? error.message : 'Technocore ownership claim failed.'} Kept as a local draft.`,
+            'error',
+          );
+          setSelectedRoomId(room.id);
+          setCreateOpen(false);
+          setRoomName('');
+          setRoomTopic('');
+          return;
+        }
+      }
+      if (roomTopic.trim()) {
+        try {
+          await adapter.setNote('topic', room.name, roomTopic);
+        } catch {
+          state.notify(
+            'Room prepared, but its public topic note could not be written.',
+            'info',
+          );
+        }
+      }
+    }
     setSelectedRoomId(room.id);
     setCreateOpen(false);
     setRoomName('');
     setRoomTopic('');
     state.notify(
-      `${room.name} created in user-controlled local state.`,
+      room.source === 'technocore'
+        ? roomKind === 'owned'
+          ? `${room.name} ownership claimed on Technocore.`
+          : `${room.name} prepared for Technocore; the first signed message creates it.`
+        : `${room.name} created in user-controlled local state.`,
       'success',
     );
   };
@@ -254,39 +455,69 @@ export function RoomsSurface() {
           : 'A message is required.',
         'error',
       );
-    const base = {
-      roomId: selectedRoom.id,
-      from: activeIdentity.did,
-      text: messageText.trim(),
-      createdAt: new Date().toISOString(),
-      seq: String(new Date().getTime()),
-      nonce: crypto.randomUUID(),
-      inReplyTo: undefined,
-    };
-    const message: ProtocolMessage = {
-      id: randomId('msg'),
-      ...base,
-      signature: signMessage(base, unlockedKey),
-      verified: true,
-    };
     if (selectedRoom.source === 'technocore') {
       if (!state.protocol.connected)
         return state.notify('Protocol endpoint is disconnected.', 'error');
       try {
-        await new HttpTechnocoreAdapter(state.protocol).sendSignedMessage(
+        const nonce = nextTechnocoreNonce(
+          state.messages,
           selectedRoom.name,
-          message,
+          activeIdentity.did,
         );
+        const signed = signTechnocoreMessage(
+          selectedRoom.name,
+          nonce,
+          messageText,
+          unlockedKey,
+        );
+        const message: ProtocolMessage = {
+          id: randomId('msg'),
+          roomId: selectedRoom.id,
+          from: activeIdentity.did,
+          text: signed.text,
+          createdAt: new Date().toISOString(),
+          seq: nonce,
+          nonce,
+          signature: signed.signature,
+          verified: true,
+        };
+        const received = await new HttpTechnocoreAdapter(
+          state.protocol,
+        ).sendSignedMessage(selectedRoom.name, message);
+        state.mergeProtocolMessages(selectedRoom.id, received);
+        requestAnimationFrame(() => scrollToLatest());
       } catch (error) {
         return state.notify(
           error instanceof Error ? error.message : 'Protocol write failed.',
           'error',
         );
       }
+    } else {
+      const base = {
+        roomId: selectedRoom.id,
+        from: activeIdentity.did,
+        text: normalizeTechnocoreText(messageText),
+        createdAt: new Date().toISOString(),
+        seq: String(new Date().getTime()),
+        nonce: crypto.randomUUID(),
+        inReplyTo: undefined,
+      };
+      const message: ProtocolMessage = {
+        id: randomId('msg'),
+        ...base,
+        signature: signMessage(base, unlockedKey),
+        verified: true,
+      };
+      state.addMessage(message);
+      requestAnimationFrame(() => scrollToLatest());
     }
-    state.addMessage(message);
     setMessageText('');
-    state.notify('Signed message sent.', 'success');
+    state.notify(
+      selectedRoom.source === 'technocore'
+        ? 'Signed message accepted by Technocore.'
+        : 'Signed local message sent.',
+      'success',
+    );
   };
   const sync = async () => {
     if (!state.protocol.baseUrl)
@@ -328,6 +559,16 @@ export function RoomsSurface() {
               >
                 ← BROWSE
               </CoreButton>
+              {selectedRoom.source === 'technocore' && (
+                <CoreButton
+                  variant="outline"
+                  onClick={() => loadRoom(selectedRoom)}
+                  disabled={roomLoading}
+                >
+                  <RefreshCw className={roomLoading ? 'spin' : ''} size={12} />
+                  {roomLoading ? 'READING…' : 'SYNC ROOM'}
+                </CoreButton>
+              )}
               <span className="source-chip">
                 <i />
                 {selectedRoom.source === 'local' ? 'LOCAL' : 'TECHNOCORE'}
@@ -363,30 +604,76 @@ export function RoomsSurface() {
             </div>
           </div>
         )}
-        <div className="message-feed">
-          {roomMessages.map((message) => (
-            <article className="message-entry" key={message.id}>
-              <Glyph did={message.from} size={5} />
-              <div>
-                <header>
-                  <strong>{shortDid(message.from)}</strong>
-                  {message.verified ? (
-                    <span className="signed">
-                      <ShieldCheck size={11} />
-                      SIGNED
-                    </span>
-                  ) : (
-                    <span>UNSIGNED</span>
-                  )}
-                  <time>{formatTime(message.createdAt)}</time>
-                </header>
-                <p>{message.text}</p>
-                <small>
-                  SEQ {message.seq} · NONCE {message.nonce.slice(0, 12)}
-                </small>
+        <div className="room-message-stream">
+          <div className="room-feed-status" aria-live="polite">
+            <span>
+              {selectedRoom.source === 'technocore'
+                ? liveFeedState === 'retrying'
+                  ? 'RECONNECTING · 5S'
+                  : liveFeedState === 'loading'
+                    ? 'LOADING LATEST 50'
+                    : 'LIVE · LONG POLL 10S'
+                : 'LOCAL ROOM'}
+            </span>
+            <span>
+              SHOWING {visibleRoomMessages.length}
+              {roomMessages.length > visibleRoomMessages.length
+                ? ` / ${roomMessages.length}`
+                : ''}
+            </span>
+          </div>
+          <div
+            className="message-feed room-message-feed"
+            ref={feedRef}
+            onScroll={(event) => {
+              const feed = event.currentTarget;
+              const nearBottom =
+                feed.scrollHeight - feed.scrollTop - feed.clientHeight < 96;
+              isNearBottomRef.current = nearBottom;
+              if (nearBottom && newMessageCount) setNewMessageCount(0);
+            }}
+          >
+            {!visibleRoomMessages.length && (
+              <div className="room-feed-empty">
+                {roomLoading || liveFeedState === 'loading'
+                  ? 'READING ROOM…'
+                  : 'NO MESSAGES YET · START THE THREAD'}
               </div>
-            </article>
-          ))}
+            )}
+            {visibleRoomMessages.map((message) => (
+              <article className="message-entry" key={message.id}>
+                <Glyph did={message.from} size={5} />
+                <div>
+                  <header>
+                    <strong>{shortDid(message.from)}</strong>
+                    {message.verified ? (
+                      <span className="signed">
+                        <ShieldCheck size={11} />
+                        SIGNED
+                      </span>
+                    ) : (
+                      <span>UNSIGNED</span>
+                    )}
+                    <time>{formatTime(message.createdAt)}</time>
+                  </header>
+                  <p>{message.text}</p>
+                  <small>
+                    SEQ {message.seq} · NONCE {message.nonce.slice(0, 12)}
+                  </small>
+                </div>
+              </article>
+            ))}
+          </div>
+          {newMessageCount > 0 && (
+            <button
+              className="new-message-jump"
+              type="button"
+              onClick={() => scrollToLatest()}
+            >
+              <ArrowDown size={13} />
+              {newMessageCount} NEW MESSAGE{newMessageCount === 1 ? '' : 'S'}
+            </button>
+          )}
         </div>
         <div className="composer">
           <CoreTextarea
@@ -472,7 +759,7 @@ export function RoomsSurface() {
         {filtered.map((room) => (
           <button
             className="matrix-row"
-            onClick={() => setSelectedRoomId(room.id)}
+            onClick={() => loadRoom(room)}
             key={room.id}
           >
             <span>

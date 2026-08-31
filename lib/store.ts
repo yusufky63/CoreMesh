@@ -71,8 +71,10 @@ interface CoreMeshState {
     kind: RoomKind,
     topic: string,
     ownerDid?: string,
+    source?: Room['source'],
   ) => Room;
   addMessage: (message: ProtocolMessage) => void;
+  mergeProtocolMessages: (roomId: string, messages: ProtocolMessage[]) => void;
   addWorker: (worker: Worker) => void;
   updateWorker: (id: string, patch: Partial<Worker>) => void;
   runWorker: (id: string) => WorkerRun;
@@ -248,18 +250,21 @@ const defaults = {
   trustedDids: [] as string[],
   notices: [] as Notice[],
   protocol: {
-    baseUrl: '',
-    readBudget: 120,
-    writeBudget: 30,
-    retryAfterMs: 8_000,
-    duplicateWindowMs: 300_000,
+    baseUrl: 'https://technocore.chat',
+    readBudget: 600,
+    writeBudget: 300,
+    retryAfterMs: 0,
+    duplicateWindowMs: 120_000,
+    maxWaitSeconds: 10,
+    retentionSeconds: 604_800,
+    ephemeralTtlSeconds: 900,
     connected: false,
-    sourceLabel: 'LOCAL LAB',
+    sourceLabel: 'TECHNOCORE · READY',
   } satisfies ProtocolConfig,
 };
 
 export const useCoreMesh = create<CoreMeshState>()(
-  persist(
+  persist<CoreMeshState, [], [], Partial<CoreMeshState>>(
     (set, get) => ({
       hydrated: false,
       ...defaults,
@@ -320,9 +325,17 @@ export const useCoreMesh = create<CoreMeshState>()(
         })),
       addRoom: (room) =>
         set((state) => ({
-          rooms: [...state.rooms.filter((item) => item.id !== room.id), room],
+          rooms: [
+            ...state.rooms.filter((item) => item.id !== room.id),
+            {
+              ...room,
+              bookmarked:
+                state.rooms.find((item) => item.id === room.id)?.bookmarked ||
+                room.bookmarked,
+            },
+          ],
         })),
-      createRoom: (name, kind, topic, ownerDid) => {
+      createRoom: (name, kind, topic, ownerDid, source = 'local') => {
         const cleanName =
           name
             .toLowerCase()
@@ -338,7 +351,7 @@ export const useCoreMesh = create<CoreMeshState>()(
           name: `${roomPrefix[kind]}${suffix}`,
           kind,
           topic,
-          source: 'local',
+          source,
           createdAt: iso(),
           ownerDid,
           bookmarked: false,
@@ -349,22 +362,62 @@ export const useCoreMesh = create<CoreMeshState>()(
         return room;
       },
       addMessage: (message) =>
-        set((state) => ({
-          messages: [...state.messages, message],
-          rooms: state.rooms.map((room) =>
-            room.id === message.roomId
-              ? {
-                  ...room,
-                  messageCount: room.messageCount + 1,
-                  signedPercent: Math.round(
-                    (room.signedPercent * room.messageCount +
-                      (message.verified ? 100 : 0)) /
-                      (room.messageCount + 1),
-                  ),
-                }
-              : room,
-          ),
-        })),
+        set((state) => {
+          if (state.messages.some((item) => item.id === message.id)) return {};
+          return {
+            messages: [...state.messages, message],
+            rooms: state.rooms.map((room) =>
+              room.id === message.roomId
+                ? {
+                    ...room,
+                    messageCount: room.messageCount + 1,
+                    signedPercent: Math.round(
+                      (room.signedPercent * room.messageCount +
+                        (message.verified ? 100 : 0)) /
+                        (room.messageCount + 1),
+                    ),
+                  }
+                : room,
+            ),
+          };
+        }),
+      mergeProtocolMessages: (roomId, incoming) =>
+        set((state) => {
+          const ids = new Set(incoming.map((message) => message.id));
+          const messages = [
+            ...state.messages.filter((message) => !ids.has(message.id)),
+            ...incoming,
+          ];
+          const observed = messages.filter(
+            (message) => message.roomId === roomId,
+          );
+          const latestSeq = incoming.reduce(
+            (highest, message) =>
+              /^\d+$/u.test(message.seq)
+                ? Math.max(highest, Number(message.seq))
+                : highest,
+            0,
+          );
+          return {
+            messages,
+            rooms: state.rooms.map((room) =>
+              room.id === roomId
+                ? {
+                    ...room,
+                    messageCount: Math.max(room.messageCount, latestSeq),
+                    signedPercent: observed.length
+                      ? Math.round(
+                          (observed.filter((message) => message.verified)
+                            .length /
+                            observed.length) *
+                            100,
+                        )
+                      : room.signedPercent,
+                  }
+                : room,
+            ),
+          };
+        }),
       addWorker: (worker) =>
         set((state) => ({ workers: [...state.workers, worker] })),
       updateWorker: (id, patch) =>
@@ -610,7 +663,20 @@ export const useCoreMesh = create<CoreMeshState>()(
     }),
     {
       name: 'coremesh-local-v1',
-      version: 1,
+      version: 2,
+      migrate: (persistedState) => {
+        const persisted = persistedState as Partial<CoreMeshState>;
+        return {
+          ...persisted,
+          protocol: {
+            ...defaults.protocol,
+            ...persisted.protocol,
+            baseUrl: persisted.protocol?.baseUrl || defaults.protocol.baseUrl,
+            connected: false,
+            sourceLabel: 'TECHNOCORE · READY',
+          },
+        } as Partial<CoreMeshState>;
+      },
       partialize: (state) => ({
         ...state,
         hydrated: undefined,
