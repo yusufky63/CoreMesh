@@ -281,10 +281,47 @@ export const useCoreMesh = create<CoreMeshState>()(
           exploreMode: false,
         })),
       removeIdentity: (id) =>
-        set((state) => ({
-          identities: state.identities.filter((item) => item.id !== id),
-          agents: state.agents.filter((item) => item.identityId !== id),
-        })),
+        set((state) => {
+          const identity = state.identities.find((item) => item.id === id);
+          if (!identity) return {};
+          const removedAgentIds = new Set(
+            state.agents
+              .filter((agent) => agent.identityId === id)
+              .map((agent) => agent.id),
+          );
+          const removedWorkerIds = new Set(
+            state.workers
+              .filter((worker) => removedAgentIds.has(worker.agentId))
+              .map((worker) => worker.id),
+          );
+          const unlockedKeys = { ...state.unlockedKeys };
+          const unlockedXKeys = { ...state.unlockedXKeys };
+          const peerXKeys = { ...state.peerXKeys };
+          delete unlockedKeys[id];
+          delete unlockedXKeys[id];
+          delete peerXKeys[identity.did];
+          const identities = state.identities.filter((item) => item.id !== id);
+
+          return {
+            identities,
+            agents: state.agents.filter(
+              (agent) => !removedAgentIds.has(agent.id),
+            ),
+            workers: state.workers.filter(
+              (worker) => !removedWorkerIds.has(worker.id),
+            ),
+            runs: state.runs.filter(
+              (run) => !removedWorkerIds.has(run.workerId),
+            ),
+            unlockedKeys,
+            unlockedXKeys,
+            peerXKeys,
+            trustedDids: state.trustedDids.filter(
+              (did) => did !== identity.did,
+            ),
+            exploreMode: identities.length ? state.exploreMode : true,
+          };
+        }),
       setUnlockedKey: (id, key) =>
         set((state) => {
           const next = { ...state.unlockedKeys };

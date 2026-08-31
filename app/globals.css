@@ -733,6 +733,20 @@ h1 {
 .core-button:disabled {
   opacity: 0.35;
 }
+.core-button.danger-button {
+  border-color: color-mix(
+    in srgb,
+    var(--error-red) 70%,
+    var(--line)
+  ) !important;
+  background: transparent !important;
+  color: var(--error-red) !important;
+}
+.core-button.danger-button:hover:not(:disabled) {
+  border-color: var(--error-red) !important;
+  background: var(--error-red) !important;
+  color: var(--bg-0) !important;
+}
 .core-input {
   border-radius: 2px !important;
   min-height: 36px;
@@ -808,6 +822,12 @@ h1 {
 }
 .form-grid .full {
   grid-column: 1/-1;
+}
+.destructive-actions {
+  display: flex;
+  justify-content: flex-end;
+  gap: 8px;
+  flex-wrap: wrap;
 }
 .field {
   display: grid;

@@ -12,6 +12,7 @@ import {
   Plus,
   Server,
   ShieldCheck,
+  Trash2,
   Upload,
 } from 'lucide-react';
 import {
@@ -57,6 +58,8 @@ export function VaultSurface() {
   const [importOpen, setImportOpen] = useState(false);
   const [unlockId, setUnlockId] = useState<string>();
   const [rawId, setRawId] = useState<string>();
+  const [removeId, setRemoveId] = useState<string>();
+  const [removeConfirm, setRemoveConfirm] = useState('');
   const [name, setName] = useState('Research Node');
   const [passphrase, setPassphrase] = useState('');
   const [bundle, setBundle] = useState('');
@@ -66,6 +69,17 @@ export function VaultSurface() {
   const current = state.identities.find(
     (identity) => identity.id === (unlockId || rawId),
   );
+  const removeTarget = state.identities.find(
+    (identity) => identity.id === removeId,
+  );
+  const linkedAgentIds = new Set(
+    state.agents
+      .filter((agent) => agent.identityId === removeId)
+      .map((agent) => agent.id),
+  );
+  const linkedWorkerCount = state.workers.filter((worker) =>
+    linkedAgentIds.has(worker.agentId),
+  ).length;
 
   const clearSecrets = () => {
     setPassphrase('');
@@ -204,6 +218,18 @@ export function VaultSurface() {
       setBusy(false);
     }
   };
+  const removeIdentity = () => {
+    if (!removeTarget || removeConfirm !== 'REMOVE') return;
+    const removedName = removeTarget.name;
+    state.removeIdentity(removeTarget.id);
+    setRemoveId(undefined);
+    setRemoveConfirm('');
+    clearSecrets();
+    state.notify(
+      `${removedName} and its local signing material were removed.`,
+      'success',
+    );
+  };
 
   return (
     <>
@@ -317,6 +343,14 @@ export function VaultSurface() {
                 >
                   <Globe2 size={12} />
                   PUBLISH PROFILE
+                </CoreButton>
+                <CoreButton
+                  variant="outline"
+                  className="danger-button"
+                  onClick={() => setRemoveId(identity.id)}
+                >
+                  <Trash2 size={12} />
+                  REMOVE
                 </CoreButton>
               </div>
             </article>
@@ -504,6 +538,72 @@ export function VaultSurface() {
             </CoreButton>
           )}
         </div>
+      </Modal>
+      <Modal
+        open={Boolean(removeId)}
+        onOpenChange={(open) => {
+          if (!open) {
+            setRemoveId(undefined);
+            setRemoveConfirm('');
+          }
+        }}
+        title="REMOVE IDENTITY"
+        description="Permanently remove this encrypted identity from the current browser."
+      >
+        {removeTarget && (
+          <div className="form-grid">
+            <div className="inline-warning">
+              <strong>{removeTarget.name}</strong> controls{' '}
+              {linkedAgentIds.size} local agent
+              {linkedAgentIds.size === 1 ? '' : 's'} and {linkedWorkerCount}{' '}
+              worker{linkedWorkerCount === 1 ? '' : 's'}. They will be removed
+              with it. Published Technocore messages and profile notes remain on
+              the protocol.
+            </div>
+            <Field
+              label="TYPE REMOVE TO CONFIRM"
+              hint="Export the encrypted bundle first if you may need this identity again."
+            >
+              <CoreInput
+                value={removeConfirm}
+                onChange={(event) => setRemoveConfirm(event.target.value)}
+                autoComplete="off"
+                spellCheck={false}
+              />
+            </Field>
+            <div className="destructive-actions">
+              <CoreButton
+                variant="outline"
+                onClick={() =>
+                  download(
+                    `${removeTarget.name.toLowerCase().replaceAll(' ', '-')}.coremesh`,
+                    exportIdentity(removeTarget),
+                  )
+                }
+              >
+                <Download size={12} />
+                EXPORT FIRST
+              </CoreButton>
+              <CoreButton
+                variant="outline"
+                onClick={() => {
+                  setRemoveId(undefined);
+                  setRemoveConfirm('');
+                }}
+              >
+                CANCEL
+              </CoreButton>
+              <CoreButton
+                className="danger-button"
+                onClick={removeIdentity}
+                disabled={removeConfirm !== 'REMOVE'}
+              >
+                <Trash2 size={12} />
+                REMOVE IDENTITY
+              </CoreButton>
+            </div>
+          </div>
+        )}
       </Modal>
     </>
   );
