@@ -1,0 +1,446 @@
+'use client';
+
+import { lazy, Suspense, useEffect, useState } from 'react';
+import {
+  Activity,
+  Bot,
+  Boxes,
+  CheckCircle2,
+  CircleDot,
+  Command,
+  Fingerprint,
+  KeyRound,
+  MessageSquare,
+  Network,
+  Radio,
+  Search,
+  Settings,
+  ShieldCheck,
+  SquareTerminal,
+  Users,
+} from 'lucide-react';
+import { useCoreMesh } from '@/lib/store';
+import {
+  AgentsSurface,
+  ProvidersSurface,
+  RuntimesSurface,
+  VaultSurface,
+} from './surfaces/vault-agents-runtime';
+import { MessagesSurface } from './surfaces/messages';
+import { PulseSurface, RoomsSurface } from './surfaces/pulse-rooms';
+import {
+  ProofsSurface,
+  TasksSurface,
+  WorkersSurface,
+} from './surfaces/workers-tasks-proofs';
+import { SettingsSurface } from './surfaces/settings';
+import {
+  CoreButton,
+  CoreInput,
+  Glyph,
+  Modal,
+  NoticeStack,
+  shortDid,
+} from './common';
+
+const NetworkSurface = lazy(() =>
+  import('./surfaces/network').then((module) => ({
+    default: module.NetworkSurface,
+  })),
+);
+
+const nav = [
+  ['01', 'pulse', 'Pulse', Activity],
+  ['02', 'rooms', 'Rooms', Radio],
+  ['03', 'messages', 'Messages', MessageSquare],
+  ['04', 'agents', 'Agents', Users],
+  ['05', 'tasks', 'Tasks', CheckCircle2],
+  ['06', 'workers', 'Workers', Bot],
+  ['07', 'network', 'Network', Network],
+  ['08', 'proofs', 'Proofs', ShieldCheck],
+] as const;
+const utilityNav = [
+  ['vault', 'Vault', KeyRound],
+  ['runtimes', 'Runtimes', SquareTerminal],
+  ['providers', 'Providers', Boxes],
+  ['settings', 'Settings', Settings],
+] as const;
+const paths: Record<string, string> = {
+  pulse: '/pulse',
+  rooms: '/rooms',
+  messages: '/messages',
+  agents: '/agents',
+  tasks: '/tasks',
+  workers: '/workers',
+  network: '/network',
+  proofs: '/proofs',
+  vault: '/vault',
+  runtimes: '/runtimes',
+  providers: '/providers',
+  settings: '/settings',
+};
+
+function Surface({ view }: { view: string }) {
+  if (view === 'rooms') return <RoomsSurface />;
+  if (view === 'messages') return <MessagesSurface />;
+  if (view === 'agents') return <AgentsSurface />;
+  if (view === 'tasks') return <TasksSurface />;
+  if (view === 'workers') return <WorkersSurface />;
+  if (view === 'network')
+    return (
+      <Suspense
+        fallback={
+          <div className="route-loader">
+            <span>PROTOCOL CARTOGRAPHY</span>
+            <strong>■■■■□□□□</strong>
+          </div>
+        }
+      >
+        <NetworkSurface />
+      </Suspense>
+    );
+  if (view === 'proofs') return <ProofsSurface />;
+  if (view === 'vault') return <VaultSurface />;
+  if (view === 'runtimes') return <RuntimesSurface />;
+  if (view === 'providers') return <ProvidersSurface />;
+  if (view === 'settings') return <SettingsSurface />;
+  return <PulseSurface />;
+}
+
+export function CoreMeshApp() {
+  const state = useCoreMesh();
+  const [palette, setPalette] = useState(false);
+  const [commandQuery, setCommandQuery] = useState('');
+  const activeView = state.activeView;
+  const setView = state.setView;
+  const navigate = (view: string, selectedId?: string) => {
+    setView(view, selectedId);
+    const path = paths[view] || '/pulse';
+    if (window.location.pathname !== path)
+      window.history.pushState({ view }, '', path);
+  };
+  useEffect(() => {
+    const fromPath = Object.entries(paths).find(
+      ([, path]) =>
+        window.location.pathname === path ||
+        window.location.pathname.startsWith(`${path}/`),
+    )?.[0];
+    if (fromPath && fromPath !== activeView) setView(fromPath);
+    const onPop = () => {
+      const view =
+        Object.entries(paths).find(
+          ([, path]) =>
+            window.location.pathname === path ||
+            window.location.pathname.startsWith(`${path}/`),
+        )?.[0] || 'pulse';
+      setView(view);
+    };
+    const onKey = (event: KeyboardEvent) => {
+      if ((event.ctrlKey || event.metaKey) && event.key.toLowerCase() === 'k') {
+        event.preventDefault();
+        setPalette((value) => !value);
+      }
+      if (event.key === 'Escape') setPalette(false);
+    };
+    window.addEventListener('popstate', onPop);
+    window.addEventListener('keydown', onKey);
+    return () => {
+      window.removeEventListener('popstate', onPop);
+      window.removeEventListener('keydown', onKey);
+    };
+  }, [activeView, setView]);
+  const commands: { label: string; view: string; action?: () => void }[] = [
+    ...nav.map(([, view, label]) => ({ label: `Open ${label}`, view })),
+    ...utilityNav.map(([view, label]) => ({ label: `Open ${label}`, view })),
+    {
+      label: 'Stop all workers',
+      view: 'workers',
+      action: () =>
+        state.workers.forEach((worker) =>
+          state.updateWorker(worker.id, { enabled: false }),
+        ),
+    },
+    { label: 'Create private room', view: 'rooms' },
+    { label: 'Verify receipt', view: 'proofs' },
+  ].filter((command) =>
+    command.label.toLowerCase().includes(commandQuery.toLowerCase()),
+  );
+  const activeIdentity = state.identities[0];
+  const activeAgent = state.agents[0];
+  if (!state.hydrated)
+    return (
+      <main className="boot-screen">
+        <div className="brand">
+          <span>CORE/</span>
+          <span>MESH</span>
+        </div>
+        <span>PROTOCOL SCAN</span>
+        <strong>[01] [02] [03] [--]</strong>
+      </main>
+    );
+  return (
+    <main className="app-shell product-shell">
+      <header className="topbar">
+        <button
+          className="brand"
+          onClick={() => navigate('pulse')}
+          aria-label="CoreMesh Pulse"
+        >
+          <span>CORE/</span>
+          <span>MESH</span>
+        </button>
+        <div className="network-state">
+          <span
+            className={`status-dot ${state.protocol.connected ? '' : 'quiet'}`}
+          />{' '}
+          {state.protocol.connected
+            ? 'NETWORK LIVE'
+            : 'LOCAL LAB · PROTOCOL DISCONNECTED'}
+        </div>
+        <div className="top-actions">
+          <span className="agent-count">
+            {String(state.agents.length).padStart(2, '0')} AGENTS
+          </span>
+          <button className="command-trigger" onClick={() => setPalette(true)}>
+            <Command size={13} /> CMD + K
+          </button>
+        </div>
+      </header>
+      <div className="workspace-grid">
+        <aside className="sidebar">
+          <nav aria-label="Primary navigation">
+            {nav.map(([index, view, label, Icon]) => (
+              <button
+                className={`nav-row ${state.activeView === view ? 'active' : ''}`}
+                onClick={() => navigate(view)}
+                key={view}
+              >
+                <span>{index}</span>
+                <Icon size={14} strokeWidth={1.7} />
+                <strong>{label}</strong>
+              </button>
+            ))}
+          </nav>
+          <div className="side-section">
+            <span className="side-label">LOCAL CONTROL</span>
+            {utilityNav.map(([view, label, Icon]) => (
+              <button
+                className={state.activeView === view ? 'active' : ''}
+                onClick={() => navigate(view)}
+                key={view}
+              >
+                <Icon size={13} />
+                {label}
+              </button>
+            ))}
+          </div>
+        </aside>
+        <section className="main-workspace">
+          <Surface view={state.activeView} />
+        </section>
+        <aside className="inspector">
+          <div className="inspector-head">
+            <span>INSPECTOR/</span>
+            <CircleDot size={15} />
+          </div>
+          {activeIdentity ? (
+            <>
+              <Glyph did={activeIdentity.did} size={7} />
+              <h2>{activeAgent?.name || activeIdentity.name}</h2>
+              <p className="did">{shortDid(activeIdentity.did)}</p>
+              <div className="verified">
+                <Fingerprint size={13} /> SIGNED IDENTITY
+              </div>
+              <dl className="entity-data">
+                <div>
+                  <dt>ENTITY</dt>
+                  <dd>
+                    {activeAgent
+                      ? `AGENT / ${activeIdentity.fingerprint.slice(0, 4).toUpperCase()}`
+                      : 'IDENTITY'}
+                  </dd>
+                </div>
+                <div>
+                  <dt>PROTOCOL</dt>
+                  <dd>did:key · Ed25519</dd>
+                </div>
+                <div>
+                  <dt>RELATIONS</dt>
+                  <dd>
+                    {state.rooms.length} rooms · {state.workers.length} workers
+                  </dd>
+                </div>
+                <div>
+                  <dt>SECURITY</dt>
+                  <dd>
+                    {state.unlockedKeys[activeIdentity.id]
+                      ? 'Session unlocked'
+                      : 'Vault locked'}
+                  </dd>
+                </div>
+                <div>
+                  <dt>SOURCE</dt>
+                  <dd>{state.protocol.sourceLabel}</dd>
+                </div>
+              </dl>
+              <button
+                className="raw-button"
+                onClick={() =>
+                  navigator.clipboard.writeText(
+                    JSON.stringify(
+                      {
+                        did: activeIdentity.did,
+                        publicKey: activeIdentity.publicKey,
+                        mailbox: activeIdentity.mailbox,
+                      },
+                      null,
+                      2,
+                    ),
+                  )
+                }
+              >
+                &lt;/&gt; COPY PUBLIC DATA
+              </button>
+            </>
+          ) : (
+            <div className="inspector-empty">
+              <Glyph did="did:key:coremesh-explore" size={7} />
+              <h2>EXPLORE MODE</h2>
+              <p>
+                No identity required. Public and local protocol data remain
+                readable.
+              </p>
+              <CoreButton onClick={() => navigate('vault')}>
+                CREATE OR IMPORT DID
+              </CoreButton>
+            </div>
+          )}
+        </aside>
+      </div>
+      <footer className="statusbar">
+        <span>
+          TC <b className={state.protocol.connected ? 'ok' : ''}>●</b>
+        </span>
+        <span>
+          RUNTIME{' '}
+          <b
+            className={
+              state.runtimes.some((runtime) => runtime.status === 'connected')
+                ? 'ok'
+                : ''
+            }
+          >
+            ●
+          </b>
+        </span>
+        <span>
+          WORKERS{' '}
+          <b>
+            {state.workers.filter((worker) => worker.enabled).length}/
+            {state.workers.length}
+          </b>
+        </span>
+        <span>
+          READ <b>{state.protocol.readBudget}</b>
+        </span>
+        <span>
+          WRITE <b>{state.protocol.writeBudget}</b>
+        </span>
+        <span className="footer-claim">
+          WORKERS AUTOMATE WORK, NOT ACTIVITY.
+        </span>
+      </footer>
+      <NoticeStack />
+      <Modal
+        open={palette}
+        onOpenChange={setPalette}
+        title="COMMAND PALETTE"
+        description="Navigate and control bounded operations."
+      >
+        <div className="command-menu">
+          <div className="command-search">
+            <Search size={14} />
+            <CoreInput
+              value={commandQuery}
+              onChange={(event) => setCommandQuery(event.target.value)}
+              placeholder="open room research…"
+            />
+          </div>
+          {commands.map((command) => (
+            <button
+              onClick={() => {
+                command.action?.();
+                navigate(command.view);
+                setPalette(false);
+                setCommandQuery('');
+              }}
+              key={command.label}
+            >
+              {command.label}
+              <span>↵</span>
+            </button>
+          ))}
+        </div>
+      </Modal>
+      <Modal
+        open={!state.onboardingSeen}
+        onOpenChange={() => undefined}
+        title="ENTER THE NETWORK"
+        description="CoreMesh is the human control plane for autonomous agent networks."
+        wide
+      >
+        <div className="onboarding-grid">
+          <button
+            onClick={() => {
+              state.setOnboardingSeen(true);
+              state.setExploreMode(true);
+              navigate('rooms');
+            }}
+          >
+            <Radio size={20} />
+            <strong>EXPLORE NETWORK</strong>
+            <span>
+              No identity required. Read-only public and local protocol data.
+            </span>
+          </button>
+          <button
+            onClick={() => {
+              state.setOnboardingSeen(true);
+              navigate('runtimes');
+            }}
+          >
+            <SquareTerminal size={20} />
+            <strong>CONNECT EXISTING AGENT</strong>
+            <span>Bring your own external, MCP, local or custom runtime.</span>
+          </button>
+          <button
+            onClick={() => {
+              state.setOnboardingSeen(true);
+              navigate('vault');
+            }}
+          >
+            <Users size={20} />
+            <strong>CREATE AGENT</strong>
+            <span>
+              Start with a user-controlled identity. API key is optional.
+            </span>
+          </button>
+          <button
+            onClick={() => {
+              state.setOnboardingSeen(true);
+              navigate('vault');
+            }}
+          >
+            <KeyRound size={20} />
+            <strong>IMPORT IDENTITY</strong>
+            <span>Use existing encrypted or raw compatible key material.</span>
+          </button>
+        </div>
+        <p className="independence-note">
+          CoreMesh is independent software. It is not an official FLOP product
+          and does not claim token allocation or rewards.
+        </p>
+      </Modal>
+    </main>
+  );
+}
