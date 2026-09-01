@@ -5,7 +5,7 @@ CoreMesh separates ownership, intelligence, automation, and proof. A model provi
 ## The operating order
 
 1. **Identity** — Create or import a DID in Vault. Its signing key is encrypted locally and unlocked only for the current session.
-2. **Provider** — Add DeepSeek, Claude, Gemini, an OpenAI-compatible service, or a local model server. API keys are session-only and are never persisted.
+2. **Provider** — Add DeepSeek, Claude, Gemini, an OpenAI-compatible service, or a local model server. Supported cloud keys are configured once in the private production server secret store and are never persisted in the browser.
 3. **Runtime** — Select a provider model, output limit, timeout, response format, thinking level, and optional fallback.
 4. **Agent** — Attach the runtime to an identity and define the agent's role, capabilities, and behavior.
 5. **Worker** — Give the agent a bounded job. Workers begin paused and have cooldown, run, write, token, cost, dedupe, and loop limits.
@@ -16,7 +16,7 @@ CoreMesh separates ownership, intelligence, automation, and proof. A model provi
 ## DeepSeek quick start
 
 1. Open **Providers**. The DeepSeek endpoint is preconfigured as `https://api.deepseek.com`.
-2. Enter an API key in the session-only field and press **Test**. CoreMesh calls the live Models API and records the discovered model names and latency, but not the key.
+2. Press **Test**. The private production workspace uses its server-managed DeepSeek key, so it survives page reloads without entering it again. CoreMesh records discovered model names and latency, but never exposes the key to browser storage.
 3. Open **Runtimes**, choose DeepSeek, and select `deepseek-v4-flash` for fast everyday work or `deepseek-v4-pro` for deeper work.
 4. Keep thinking at **high** for the recommended first run. Thinking mode ignores temperature; turn thinking off if you need temperature-controlled generation.
 5. Use a practical output cap such as 4,096 tokens and a 90-second timeout. Add a fallback runtime for important workers.
@@ -32,7 +32,7 @@ CoreMesh separates ownership, intelligence, automation, and proof. A model provi
 - Per-agent `user_id` isolation using a non-private local agent identifier.
 - Token, reasoning-token, cache-hit, model, and latency accounting when returned by the provider.
 - Runtime fallback when the primary model fails.
-- Session-only provider credentials that are cleared after each test or worker run. Hosted DeepSeek calls pass through a fixed, no-storage CoreMesh relay so the browser is not blocked by provider CORS; the relay accepts only the Models and Chat Completions paths and never logs or saves the credential.
+- Server-managed credentials for OpenAI, Claude, Gemini, DeepSeek, OpenRouter, Groq, and Together, plus optional session-only overrides. Hosted calls pass through a fixed, allowlisted CoreMesh relay so credentials never reach browser storage. The relay accepts only model discovery and generation paths and never logs credentials.
 - Operator review before any model result can become a signed network action.
 
 The integration contract was also verified against DeepSeek's streaming, tool-calling, JSON, thinking, and Responses API behavior. CoreMesh does not grant tools merely because a model supports tool calls; tools must be added to a bounded worker policy first.
@@ -40,6 +40,7 @@ The integration contract was also verified against DeepSeek's streaming, tool-ca
 ## Security notes
 
 - Never paste an API key into a room, task, message, proof, agent behavior, or exported identity bundle.
+- Keep deployments with hosted provider keys private. Replace or remove keys before granting untrusted users access.
 - Treat room and task content as untrusted input. The runtime receives an explicit safety layer before that context.
 - Keep workers paused until their rooms, approval mode, budgets, and fallback are reviewed.
 - Use the kill switch if a worker repeats, exceeds its purpose, or produces unexpected output.

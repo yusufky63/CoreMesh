@@ -249,3 +249,76 @@ export const formatDate = (value: string) =>
     hour: '2-digit',
     minute: '2-digit',
   }).format(new Date(value));
+
+export function Pagination({
+  currentPage,
+  totalPages,
+  totalItems,
+  onPageChange,
+  className = '',
+}: {
+  currentPage: number;
+  totalPages: number;
+  totalItems?: number;
+  onPageChange: (page: number) => void;
+  className?: string;
+}) {
+  if (totalPages <= 1) return null;
+
+  return (
+    <div className={`cyber-pagination ${className}`}>
+      <div className="pagination-info">
+        {totalItems !== undefined && (
+          <span>
+            {totalItems} TOTAL · PAGE <strong>{currentPage}</strong> OF{' '}
+            <strong>{totalPages}</strong>
+          </span>
+        )}
+      </div>
+      <div className="pagination-controls">
+        <button
+          type="button"
+          className="page-nav-btn"
+          disabled={currentPage <= 1}
+          onClick={() => onPageChange(currentPage - 1)}
+          aria-label="Previous Page"
+        >
+          &lt; PREV
+        </button>
+
+        {Array.from({ length: totalPages }, (_, i) => i + 1)
+          .filter((p) => {
+            if (totalPages <= 7) return true;
+            if (p === 1 || p === totalPages) return true;
+            return Math.abs(p - currentPage) <= 1;
+          })
+          .map((p, idx, arr) => {
+            const prev = arr[idx - 1];
+            const hasGap = prev !== undefined && p - prev > 1;
+            return (
+              <span key={p} className="page-num-wrap">
+                {hasGap && <span className="page-ellipsis">…</span>}
+                <button
+                  type="button"
+                  className={`page-num-btn ${currentPage === p ? 'active' : ''}`}
+                  onClick={() => onPageChange(p)}
+                >
+                  {p}
+                </button>
+              </span>
+            );
+          })}
+
+        <button
+          type="button"
+          className="page-nav-btn"
+          disabled={currentPage >= totalPages}
+          onClick={() => onPageChange(currentPage + 1)}
+          aria-label="Next Page"
+        >
+          NEXT &gt;
+        </button>
+      </div>
+    </div>
+  );
+}

@@ -456,9 +456,9 @@ export class HttpAgentRuntime implements AgentRuntime {
       '',
     );
   }
-  private requestUrl(path: '/models' | '/chat/completions') {
-    if (this.provider?.kind === 'deepseek' && typeof window !== 'undefined')
-      return path === '/models' ? '/api/deepseek/models' : '/api/deepseek/chat';
+  private requestUrl(path: '/models' | '/chat/completions' | '/messages') {
+    if (this.provider?.serverManagedSecret && typeof window !== 'undefined')
+      return `/api/providers/${this.provider.kind}?path=${path}`;
     return `${this.endpoint()}${path}`;
   }
   private headers() {
@@ -555,7 +555,7 @@ export class HttpAgentRuntime implements AgentRuntime {
     if (this.provider?.kind === 'anthropic') {
       const body = (await (
         await checkedFetch(
-          `${endpoint}/messages`,
+          this.requestUrl('/messages'),
           {
             method: 'POST',
             headers: this.headers(),

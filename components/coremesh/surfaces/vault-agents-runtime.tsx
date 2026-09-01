@@ -897,50 +897,50 @@ const providerTemplates: Record<
     label: 'OpenAI',
     name: 'OpenAI',
     endpoint: 'https://api.openai.com/v1',
-    secretRequired: true,
-    contract: 'OpenAI-compatible',
+    secretRequired: false,
+    contract: 'Hosted key · OpenAI-compatible',
   },
   anthropic: {
     label: 'Claude / Anthropic',
     name: 'Claude',
     endpoint: 'https://api.anthropic.com/v1',
-    secretRequired: true,
-    contract: 'Anthropic Messages API',
+    secretRequired: false,
+    contract: 'Hosted key · Anthropic Messages API',
   },
   gemini: {
     label: 'Google Gemini',
     name: 'Gemini',
     endpoint: 'https://generativelanguage.googleapis.com/v1beta/openai',
-    secretRequired: true,
-    contract: 'Gemini OpenAI compatibility',
+    secretRequired: false,
+    contract: 'Hosted key · Gemini compatibility',
   },
   deepseek: {
     label: 'DeepSeek',
     name: 'DeepSeek',
     endpoint: 'https://api.deepseek.com',
-    secretRequired: true,
-    contract: 'OpenAI-compatible',
+    secretRequired: false,
+    contract: 'Hosted key · OpenAI-compatible',
   },
   openrouter: {
     label: 'OpenRouter',
     name: 'OpenRouter',
     endpoint: 'https://openrouter.ai/api/v1',
-    secretRequired: true,
-    contract: 'OpenAI-compatible',
+    secretRequired: false,
+    contract: 'Hosted key · OpenAI-compatible',
   },
   groq: {
     label: 'Groq',
     name: 'Groq',
     endpoint: 'https://api.groq.com/openai/v1',
-    secretRequired: true,
-    contract: 'OpenAI-compatible',
+    secretRequired: false,
+    contract: 'Hosted key · OpenAI-compatible',
   },
   together: {
     label: 'Together AI',
     name: 'Together AI',
     endpoint: 'https://api.together.xyz/v1',
-    secretRequired: true,
-    contract: 'OpenAI-compatible',
+    secretRequired: false,
+    contract: 'Hosted key · OpenAI-compatible',
   },
   'lm-studio': {
     label: 'LM Studio',
@@ -971,11 +971,10 @@ export function ProvidersSurface() {
   const [name, setName] = useState('OpenAI');
   const [kind, setKind] = useState<Provider['kind']>('openai-compatible');
   const [endpoint, setEndpoint] = useState('https://api.openai.com/v1');
-  const [secretRequired, setSecretRequired] = useState(true);
-  const [secrets, setSecrets] = useState<Record<string, string>>({});
+  const [secretRequired, setSecretRequired] = useState(false);
   const [testing, setTesting] = useState('');
   const test = async (provider: Provider) => {
-    const secret = secrets[provider.id] || '';
+    const secret = state.providerSessionSecrets[provider.id] || '';
     if (provider.secretRequired && !secret)
       return state.notify('Enter a session API key before testing.', 'error');
     setTesting(provider.id);
@@ -1008,7 +1007,6 @@ export function ProvidersSurface() {
       result.ok ? 'success' : 'error',
     );
     setTesting('');
-    setSecrets((items) => ({ ...items, [provider.id]: '' }));
   };
   const applyTemplate = (next: Provider['kind']) => {
     const template = providerTemplates[next];
@@ -1022,7 +1020,7 @@ export function ProvidersSurface() {
       <SectionHeader
         index="PROVIDERS"
         title={'RUNTIME/\nPROVIDERS'}
-        subtitle="Cloud and localhost model providers. Secrets remain session-only."
+        subtitle="Cloud keys live in the production secret store; local providers stay local."
         action={
           <CoreButton onClick={() => setOpen(true)}>
             <Plus size={13} />
@@ -1041,7 +1039,11 @@ export function ProvidersSurface() {
               <p>{provider.endpoint}</p>
               <small>
                 {providerTemplates[provider.kind].contract} ·{' '}
-                {provider.secretRequired ? 'SESSION KEY' : 'NO KEY'}
+                {provider.serverManagedSecret
+                  ? 'HOSTED KEY'
+                  : provider.secretRequired
+                    ? 'SESSION KEY'
+                    : 'NO KEY'}
               </small>
               {provider.models?.length ? (
                 <small className="provider-models">
@@ -1055,17 +1057,21 @@ export function ProvidersSurface() {
               </span>
             </div>
             <div className="provider-actions">
-              {provider.secretRequired && (
+              {(provider.secretRequired || provider.serverManagedSecret) && (
                 <CoreInput
                   type="password"
-                  value={secrets[provider.id] || ''}
+                  value={state.providerSessionSecrets[provider.id] || ''}
                   onChange={(event) =>
-                    setSecrets((items) => ({
-                      ...items,
-                      [provider.id]: event.target.value,
-                    }))
+                    state.setProviderSessionSecret(
+                      provider.id,
+                      event.target.value,
+                    )
                   }
-                  placeholder="Session API key"
+                  placeholder={
+                    provider.serverManagedSecret
+                      ? 'Optional session override'
+                      : 'Session API key'
+                  }
                 />
               )}
               <CoreButton
@@ -1075,6 +1081,16 @@ export function ProvidersSurface() {
               >
                 {testing === provider.id ? 'TESTING…' : 'TEST'}
               </CoreButton>
+              {state.providerSessionSecrets[provider.id] && (
+                <CoreButton
+                  variant="outline"
+                  onClick={() =>
+                    state.setProviderSessionSecret(provider.id, '')
+                  }
+                >
+                  CLEAR KEY
+                </CoreButton>
+              )}
             </div>
           </article>
         ))}
@@ -1121,7 +1137,10 @@ export function ProvidersSurface() {
               checked={secretRequired}
               onChange={(event) => setSecretRequired(event.target.checked)}
             />
-            <span>API key required for test (never persisted)</span>
+            <span>
+              Use a session key only for custom providers; supported cloud keys
+              are configured once on the production server
+            </span>
           </label>
           <CoreButton
             onClick={() => {
@@ -1138,6 +1157,15 @@ export function ProvidersSurface() {
                 endpoint,
                 connected: false,
                 secretRequired,
+                serverManagedSecret: [
+                  'openai-compatible',
+                  'anthropic',
+                  'gemini',
+                  'deepseek',
+                  'openrouter',
+                  'groq',
+                  'together',
+                ].includes(kind),
               });
               setOpen(false);
               state.notify(`${name} provider configuration saved.`, 'success');

@@ -45,10 +45,12 @@ import {
   Field,
   formatDate,
   Modal,
+  Pagination,
   ProtocolStrip,
   SectionHeader,
   shortDid,
 } from '../common';
+import { QuickUnlockModal } from '../quick-unlock-modal';
 
 const workerTypes: Worker['type'][] = [
   'room-listener',
@@ -76,7 +78,13 @@ function validReceiptSignature(receipt: WorkReceipt) {
 export function WorkersSurface() {
   const state = useCoreMesh();
   const [open, setOpen] = useState(false);
-  const [selected, setSelected] = useState(state.selectedId || '');
+  const [selectedOverride, setSelectedOverride] = useState<string | null>(null);
+  const selected =
+    selectedOverride ??
+    (state.selectedId && state.workers.some((w) => w.id === state.selectedId)
+      ? state.selectedId
+      : '');
+  const setSelected = (id: string) => setSelectedOverride(id);
   const [name, setName] = useState('Room Listener');
   const [type, setType] = useState<Worker['type']>('room-listener');
   const [agentId, setAgentId] = useState(state.agents[0]?.id || '');
@@ -161,7 +169,10 @@ export function WorkersSurface() {
         runtime,
         state.runtimes,
         state.providers,
-        sessionSecret || undefined,
+        sessionSecret ||
+          (runtime.providerId
+            ? state.providerSessionSecrets[runtime.providerId]
+            : undefined),
         executionInput,
       );
       const {
@@ -614,8 +625,22 @@ export function WorkersSurface() {
 export function TasksSurface() {
   const state = useCoreMesh();
   const [open, setOpen] = useState(false);
-  const [selected, setSelected] = useState(state.selectedId || '');
+  const [selectedOverride, setSelectedOverride] = useState<string | null>(null);
+  const selected =
+    selectedOverride ??
+    (state.selectedId && state.tasks.some((t) => t.id === state.selectedId)
+      ? state.selectedId
+      : '');
+  const setSelected = (id: string) => setSelectedOverride(id);
+  const [taskPage, setTaskPage] = useState(1);
+  const TASKS_PER_PAGE = 6;
+  const totalTaskPages = Math.ceil(state.tasks.length / TASKS_PER_PAGE);
+  const paginatedTasks = state.tasks.slice(
+    (taskPage - 1) * TASKS_PER_PAGE,
+    taskPage * TASKS_PER_PAGE,
+  );
   const [title, setTitle] = useState('Review protocol room ownership');
+  const [quickUnlockOpen, setQuickUnlockOpen] = useState(false);
   const [description, setDescription] = useState(
     'Compare managed room behavior and produce an evidence-backed artifact.',
   );
@@ -670,12 +695,18 @@ export function TasksSurface() {
         'Assigned agent and artifact content are required.',
         'error',
       );
-    const identity = state.identities.find(
+    const current = useCoreMesh.getState();
+    const identity = current.identities.find(
       (item) => item.did === task.assignedAgentDid,
     );
-    const key = identity && state.unlockedKeys[identity.id];
-    if (!identity || !key)
+    const key = identity && current.unlockedKeys[identity.id];
+    if (!identity || !key) {
+      if (identity) {
+        setQuickUnlockOpen(true);
+        return;
+      }
       return state.notify('Unlock the assigned signing identity.', 'error');
+    }
     const artifact = {
       name: artifactName,
       uri: `coremesh://artifact/${task.id}/${encodeURIComponent(artifactName)}`,
@@ -936,6 +967,16 @@ export function TasksSurface() {
             )}
           </aside>
         </div>
+        <QuickUnlockModal
+          open={quickUnlockOpen}
+          onOpenChange={setQuickUnlockOpen}
+          targetIdentityId={
+            state.identities.find(
+              (identity) => identity.did === task.assignedAgentDid,
+            )?.id
+          }
+          onUnlocked={() => void submit()}
+        />
       </>
     );
   }
@@ -963,7 +1004,7 @@ export function TasksSurface() {
           <span>AGENT</span>
           <span>WORKSPACE</span>
         </div>
-        {state.tasks.map((item) => (
+        {paginatedTasks.map((item) => (
           <button
             className="matrix-row"
             onClick={() => setSelected(item.id)}
@@ -979,6 +1020,12 @@ export function TasksSurface() {
           </button>
         ))}
       </div>
+      <Pagination
+        currentPage={taskPage}
+        totalPages={totalTaskPages}
+        totalItems={state.tasks.length}
+        onPageChange={setTaskPage}
+      />
       {!state.tasks.length && (
         <EmptyState
           title="NO TASKS"
@@ -1075,7 +1122,24 @@ export function TasksSurface() {
 
 export function ProofsSurface() {
   const state = useCoreMesh();
-  const [raw, setRaw] = useState('');
+  const selectedReceipt = state.selectedId
+    ? state.receipts.find((r) => r.taskId === state.selectedId)
+    : state.receipts.at(-1);
+  const [customRaw, setCustomRaw] = useState<string | null>(null);
+  const [proofPage, setProofPage] = useState(1);
+  const PROOFS_PER_PAGE = 6;
+  const totalProofPages = Math.ceil(state.receipts.length / PROOFS_PER_PAGE);
+  const paginatedReceipts = state.receipts.slice(
+    (proofPage - 1) * PROOFS_PER_PAGE,
+    proofPage * PROOFS_PER_PAGE,
+  );
+  const raw =
+    customRaw !== null
+      ? customRaw
+      : selectedReceipt
+        ? JSON.stringify(selectedReceipt, null, 2)
+        : '';
+  const setRaw = (val: string) => setCustomRaw(val);
   const [artifactContent, setArtifactContent] = useState('');
   const [result, setResult] = useState<{
     did: ProofStatus;
@@ -1270,7 +1334,7 @@ export function ProofsSurface() {
         </aside>
       </div>
       <div className="receipt-ledger">
-        {state.receipts.map((receipt) => (
+        {paginatedReceipts.map((receipt) => (
           <button
             onClick={() => {
               setRaw(JSON.stringify(receipt, null, 2));
@@ -1289,6 +1353,12 @@ export function ProofsSurface() {
           </button>
         ))}
       </div>
+      <Pagination
+        currentPage={proofPage}
+        totalPages={totalProofPages}
+        totalItems={state.receipts.length}
+        onPageChange={setProofPage}
+      />
     </>
   );
 }

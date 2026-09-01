@@ -66,6 +66,7 @@ export interface Provider {
   endpoint: string;
   connected: boolean;
   secretRequired: boolean;
+  serverManagedSecret?: boolean;
   lastTest?: string;
   lastLatencyMs?: number;
   models?: string[];

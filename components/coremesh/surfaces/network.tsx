@@ -7,23 +7,42 @@ import { useCoreMesh } from '@/lib/store';
 import {
   CoreButton,
   EmptyState,
+  Pagination,
   ProtocolStrip,
   SectionHeader,
+  shortDid,
 } from '../common';
 
 export function NetworkSurface() {
   const state = useCoreMesh();
   const container = useRef<HTMLDivElement>(null);
+  const cyRef = useRef<cytoscape.Core | null>(null);
   const [mode, setMode] = useState<'map' | 'table'>('map');
   const [windowSize, setWindowSize] = useState('5m');
+  const [selectedNode, setSelectedNode] = useState<{
+    id: string;
+    label: string;
+    kind: string;
+    glyph: string;
+    targetView?: string;
+    targetId?: string;
+    did?: string;
+    messageCount?: number;
+    enabled?: boolean;
+    status?: string;
+  } | null>(null);
+
   const elements = useMemo<ElementDefinition[]>(() => {
     const nodes: ElementDefinition[] = [];
     const edges: ElementDefinition[] = [];
+
+    // 1. AGENTS: Left Cluster
     state.agents.forEach((agent, index) => {
       const identity = state.identities.find(
         (item) => item.id === agent.identityId,
       );
       if (!identity) return;
+      const yPos = 100 + index * 140;
       nodes.push({
         data: {
           id: agent.id,
@@ -31,9 +50,13 @@ export function NetworkSurface() {
           kind: 'AGENT',
           glyph: '▦',
           signed: true,
+          did: identity.did,
+          targetView: 'agents',
         },
-        position: { x: 110, y: 90 + index * 120 },
+        position: { x: 120, y: yPos },
       });
+
+      // Connect agent to rooms it participates in
       state.rooms
         .filter(
           (room) =>
@@ -58,20 +81,17 @@ export function NetworkSurface() {
           }),
         );
     });
-    state.rooms.forEach((room, index) =>
-      nodes.push({
-        data: {
-          id: room.id,
-          label: room.name.toUpperCase(),
-          kind: 'ROOM',
-          glyph: '□',
-          private: room.kind.includes('private'),
-          ephemeral: room.kind.includes('ephemeral'),
-        },
-        position: { x: 400, y: 70 + index * 90 },
-      }),
-    );
+
+    // 2. WORKERS: Clustered around controlling Agent
     state.workers.forEach((worker, index) => {
+      const parentAgentIdx = state.agents.findIndex(
+        (a) => a.id === worker.agentId,
+      );
+      const agentY =
+        parentAgentIdx >= 0 ? 100 + parentAgentIdx * 140 : 100 + index * 100;
+      const workerYOffset =
+        (index % 2 === 0 ? -40 : 40) + Math.floor(index / 2) * 50;
+
       nodes.push({
         data: {
           id: worker.id,
@@ -79,17 +99,20 @@ export function NetworkSurface() {
           kind: 'WORKER',
           glyph: '▥',
           enabled: worker.enabled,
+          targetView: 'workers',
         },
-        position: { x: 680, y: 70 + index * 90 },
+        position: { x: 340, y: agentY + workerYOffset },
       });
+
       edges.push({
         data: {
           id: `edge_${worker.agentId}_${worker.id}`,
           source: worker.agentId,
           target: worker.id,
-          label: 'runs',
+          label: 'controls',
         },
       });
+
       worker.rooms.forEach((room) =>
         edges.push({
           data: {
@@ -102,16 +125,40 @@ export function NetworkSurface() {
         }),
       );
     });
+
+    // 3. ROOMS: Central Communication Nexus
+    state.rooms.forEach((room, index) => {
+      const yPos = 80 + index * 100;
+      nodes.push({
+        data: {
+          id: room.id,
+          label: room.name.toUpperCase(),
+          kind: 'ROOM',
+          glyph: '□',
+          private: room.kind.includes('private'),
+          ephemeral: room.kind.includes('ephemeral'),
+          messageCount: room.messageCount,
+          targetView: 'rooms',
+        },
+        position: { x: 580, y: yPos },
+      });
+    });
+
+    // 4. TASKS: Right Output Cluster
     state.tasks.forEach((task, index) => {
+      const yPos = 100 + index * 110;
       nodes.push({
         data: {
           id: task.id,
           label: task.title.toUpperCase(),
           kind: 'TASK',
           glyph: '▭',
+          status: task.status,
+          targetView: 'tasks',
         },
-        position: { x: 390, y: 430 + index * 90 },
+        position: { x: 820, y: yPos },
       });
+
       if (task.assignedAgentDid) {
         const identity = state.identities.find(
           (item) => item.did === task.assignedAgentDid,
@@ -125,13 +172,21 @@ export function NetworkSurface() {
               id: `edge_${agent.id}_${task.id}`,
               source: agent.id,
               target: task.id,
-              label: 'assigned',
+              label: 'executes',
             },
           });
       }
     });
+
+    // 5. PROOFS: Output Verifier Terminal Nodes
     state.receipts.forEach((receipt, index) => {
       const id = `proof_${receipt.taskId}_${index}`;
+      const parentTaskIdx = state.tasks.findIndex(
+        (t) => t.id === receipt.taskId,
+      );
+      const taskY =
+        parentTaskIdx >= 0 ? 100 + parentTaskIdx * 110 : 100 + index * 90;
+
       nodes.push({
         data: {
           id,
@@ -139,19 +194,23 @@ export function NetworkSurface() {
           kind: 'PROOF',
           glyph: '◇',
           verified: true,
+          targetView: 'proofs',
+          targetId: receipt.taskId,
         },
-        position: { x: 680, y: 430 + index * 90 },
+        position: { x: 1040, y: taskY },
       });
+
       edges.push({
         data: {
           id: `edge_${receipt.taskId}_${id}`,
           source: receipt.taskId,
           target: id,
-          label: 'result',
+          label: 'attests',
           signed: true,
         },
       });
     });
+
     return [...nodes, ...edges];
   }, [
     state.agents,
@@ -163,14 +222,34 @@ export function NetworkSurface() {
     state.receipts,
   ]);
 
+  const handleFocus = () => {
+    if (mode !== 'map') setMode('map');
+    if (!cyRef.current) return;
+    if (selectedNode) {
+      const ele = cyRef.current.$id(selectedNode.id);
+      if (ele && ele.length) {
+        cyRef.current.animate({
+          center: { eles: ele },
+          zoom: 1.3,
+          duration: 350,
+        });
+        return;
+      }
+    }
+    cyRef.current.animate({
+      fit: { eles: cyRef.current.elements(), padding: 40 },
+      duration: 350,
+    });
+  };
+
   useEffect(() => {
     if (!container.current || mode !== 'map') return;
     const cy = cytoscape({
       container: container.current,
       elements,
-      layout: { name: 'preset', fit: true, padding: 40 },
-      minZoom: 0.35,
-      maxZoom: 2.5,
+      layout: { name: 'preset', fit: true, padding: 50 },
+      minZoom: 0.25,
+      maxZoom: 3.0,
       style: [
         {
           selector: 'node',
@@ -189,6 +268,8 @@ export function NetworkSurface() {
             'text-halign': 'center',
             'text-wrap': 'ellipsis',
             'text-max-width': '92px',
+            'transition-property': 'border-color, border-width, opacity',
+            'transition-duration': 0.2,
           },
         },
         {
@@ -220,7 +301,7 @@ export function NetworkSurface() {
         {
           selector: 'edge',
           style: {
-            width: 1,
+            width: 1.5,
             'line-color': '#3a3a3a',
             'target-arrow-color': '#3a3a3a',
             'target-arrow-shape': 'none',
@@ -230,10 +311,12 @@ export function NetworkSurface() {
             label: 'data(label)',
             color: '#676767',
             'font-family': 'Space Mono, monospace',
-            'font-size': 7,
+            'font-size': 7.5,
             'text-background-color': '#050505',
             'text-background-opacity': 1,
             'text-background-padding': '3px',
+            'transition-property': 'line-color, width, opacity',
+            'transition-duration': 0.2,
           },
         },
         { selector: 'edge[signed]', style: { 'line-color': '#32d74b' } },
@@ -246,19 +329,83 @@ export function NetworkSurface() {
           },
         },
         {
+          selector: '.highlighted',
+          style: {
+            'border-color': '#00b4d8',
+            'border-width': 2,
+            'line-color': '#00b4d8',
+            opacity: 1,
+            'z-index': 999,
+          },
+        },
+        {
+          selector: '.faded',
+          style: {
+            opacity: 0.25,
+          },
+        },
+        {
           selector: ':selected',
           style: {
-            'border-color': '#f3f3f3',
+            'border-color': '#ffffff',
             'border-width': 2,
-            'line-color': '#f3f3f3',
+            'line-color': '#00b4d8',
           },
         },
       ],
     });
-    return () => cy.destroy();
+
+    cy.on('tap', 'node', (evt) => {
+      const node = evt.target;
+      const data = node.data();
+      setSelectedNode({
+        id: node.id(),
+        label: String(data.label || ''),
+        kind: String(data.kind || ''),
+        glyph: String(data.glyph || ''),
+        targetView: data.targetView ? String(data.targetView) : undefined,
+        targetId: data.targetId ? String(data.targetId) : data.id,
+        did: data.did ? String(data.did) : undefined,
+        messageCount:
+          typeof data.messageCount === 'number' ? data.messageCount : undefined,
+        enabled: typeof data.enabled === 'boolean' ? data.enabled : undefined,
+        status: data.status ? String(data.status) : undefined,
+      });
+
+      cy.elements().removeClass('highlighted faded');
+      node.neighborhood().addClass('highlighted');
+      node.addClass('highlighted');
+      cy.elements().not(node.neighborhood().add(node)).addClass('faded');
+    });
+
+    cy.on('tap', (evt) => {
+      if (evt.target === cy) {
+        setSelectedNode(null);
+        cy.elements().removeClass('highlighted faded');
+      }
+    });
+
+    cyRef.current = cy;
+    cy.resize();
+    cy.fit(undefined, 50);
+
+    return () => {
+      try {
+        cy.destroy();
+        cyRef.current = null;
+      } catch {}
+    };
   }, [elements, mode]);
 
   const nodes = elements.filter((element) => !element.data.source);
+  const [tablePage, setTablePage] = useState(1);
+  const NODES_PER_PAGE = 8;
+  const totalTablePages = Math.ceil(nodes.length / NODES_PER_PAGE);
+  const paginatedNodes = nodes.slice(
+    (tablePage - 1) * NODES_PER_PAGE,
+    tablePage * NODES_PER_PAGE,
+  );
+
   return (
     <>
       <SectionHeader
@@ -281,7 +428,7 @@ export function NetworkSurface() {
                 <Table2 size={11} /> TABLE
               </button>
             </div>
-            <CoreButton variant="outline" onClick={() => setMode('map')}>
+            <CoreButton variant="outline" onClick={handleFocus}>
               <Maximize2 size={12} />
               FOCUS
             </CoreButton>
@@ -312,49 +459,156 @@ export function NetworkSurface() {
             {value}
           </button>
         ))}
-        <i>solid = signed · dashed = unsigned · double border = private</i>
+        <i>
+          solid = signed · dashed = unsigned · double border = private · click
+          node to inspect
+        </i>
       </div>
       {nodes.length ? (
-        mode === 'map' ? (
+        <div className="map-container-relative">
           <div
             className="cy-map"
             ref={container}
+            style={{ display: mode === 'map' ? 'block' : 'none' }}
             aria-label="Interactive agent network map"
           />
-        ) : (
-          <div className="network-table">
-            <div className="matrix-head">
-              <span>ENTITY</span>
-              <span>TYPE</span>
-              <span>STATE</span>
-              <span>RELATIONS</span>
-            </div>
-            {nodes.map((node) => (
-              <div className="matrix-row" key={node.data.id}>
-                <span>
-                  {node.data.glyph} {node.data.label}
+
+          {/* ── Node Inspector HUD Card ── */}
+          {selectedNode && mode === 'map' && (
+            <div className="map-node-inspector">
+              <div className="node-inspector-head">
+                <span className="node-inspector-glyph">
+                  {selectedNode.glyph}
                 </span>
-                <span>{node.data.kind}</span>
-                <span>
-                  {node.data.verified
-                    ? 'VERIFIED'
-                    : node.data.enabled
-                      ? 'LIVE'
-                      : 'OBSERVED'}
-                </span>
-                <span>
-                  {
-                    elements.filter(
-                      (edge) =>
-                        edge.data.source === node.data.id ||
-                        edge.data.target === node.data.id,
-                    ).length
-                  }
-                </span>
+                <div className="node-inspector-titles">
+                  <strong>{selectedNode.label}</strong>
+                  <span className="node-kind-tag">{selectedNode.kind}</span>
+                </div>
+                <button
+                  className="inspector-close-btn"
+                  onClick={() => {
+                    setSelectedNode(null);
+                    cyRef.current?.elements().removeClass('highlighted faded');
+                  }}
+                  aria-label="Close inspector"
+                >
+                  ✕
+                </button>
               </div>
-            ))}
-          </div>
-        )
+              <div className="node-inspector-body">
+                {selectedNode.kind === 'ROOM' && (
+                  <p>
+                    Technocore Channel · {selectedNode.messageCount ?? 0}{' '}
+                    messages recorded.
+                  </p>
+                )}
+                {selectedNode.kind === 'AGENT' && (
+                  <p>
+                    Autonomous Agent · Bound to DID{' '}
+                    {shortDid(selectedNode.did || '')}.
+                  </p>
+                )}
+                {selectedNode.kind === 'WORKER' && (
+                  <p>
+                    Bounded Worker Engine ·{' '}
+                    {selectedNode.enabled ? 'Live and active' : 'Paused'}.
+                  </p>
+                )}
+                {selectedNode.kind === 'TASK' && (
+                  <p>
+                    Coordination Task · Status: {selectedNode.status || 'open'}.
+                  </p>
+                )}
+                {selectedNode.kind === 'PROOF' && (
+                  <p>
+                    Cryptographic Work Receipt · SHA-256 + Ed25519 signature
+                    verified.
+                  </p>
+                )}
+                <div className="node-inspector-actions">
+                  <CoreButton
+                    onClick={() => {
+                      if (selectedNode.targetView) {
+                        state.setView(
+                          selectedNode.targetView,
+                          selectedNode.targetId,
+                        );
+                        const path = `/${selectedNode.targetView}`;
+                        if (window.location.pathname !== path)
+                          window.history.pushState(
+                            {
+                              view: selectedNode.targetView,
+                              selectedId: selectedNode.targetId,
+                            },
+                            '',
+                            path,
+                          );
+                      }
+                    }}
+                  >
+                    OPEN {selectedNode.kind}
+                  </CoreButton>
+                  <CoreButton
+                    variant="outline"
+                    onClick={() => {
+                      const ele = cyRef.current?.$id(selectedNode.id);
+                      if (ele) {
+                        cyRef.current?.animate({
+                          center: { eles: ele },
+                          zoom: 1.5,
+                          duration: 350,
+                        });
+                      }
+                    }}
+                  >
+                    ZOOM IN
+                  </CoreButton>
+                </div>
+              </div>
+            </div>
+          )}
+
+          {mode === 'table' && (
+            <div className="network-table">
+              <div className="matrix-head">
+                <span>ENTITY</span>
+                <span>TYPE</span>
+                <span>STATE</span>
+                <span>RELATIONS</span>
+              </div>
+              {paginatedNodes.map((node) => (
+                <div className="matrix-row" key={node.data.id}>
+                  <span>
+                    {node.data.glyph} {node.data.label}
+                  </span>
+                  <span>{node.data.kind}</span>
+                  <span>
+                    {node.data.verified
+                      ? 'VERIFIED'
+                      : node.data.enabled
+                        ? 'LIVE'
+                        : 'OBSERVED'}
+                  </span>
+                  <span>
+                    {
+                      elements.filter(
+                        (edge) =>
+                          edge.data.source === node.data.id ||
+                          edge.data.target === node.data.id,
+                      ).length
+                    }
+                  </span>
+                </div>
+              ))}
+              <Pagination
+                currentPage={tablePage}
+                totalPages={totalTablePages}
+                totalItems={nodes.length}
+                onPageChange={setTablePage}
+              />
+            </div>
+          )}
+        </div>
       ) : (
         <EmptyState
           title="NO MESH ENTITIES"

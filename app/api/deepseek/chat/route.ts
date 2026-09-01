@@ -1,10 +1,17 @@
+import { getServerSecret } from '@/lib/server-env';
+
 const deepSeekChatUrl = 'https://api.deepseek.com/chat/completions';
 
 export async function POST(request: Request) {
-  const authorization = request.headers.get('authorization');
+  const suppliedAuthorization = request.headers.get('authorization');
+  const authorization =
+    suppliedAuthorization ||
+    (getServerSecret('DEEPSEEK_API_KEY')
+      ? `Bearer ${getServerSecret('DEEPSEEK_API_KEY')}`
+      : null);
   if (!authorization?.startsWith('Bearer '))
     return Response.json(
-      { error: 'A session API key is required.' },
+      { error: 'DeepSeek is not configured for this deployment.' },
       { status: 401, headers: { 'cache-control': 'no-store' } },
     );
   const contentType = request.headers.get('content-type') || '';

@@ -9,6 +9,7 @@ import {
   CircleDot,
   Command,
   Fingerprint,
+  Globe2,
   HelpCircle,
   KeyRound,
   MessageSquare,
@@ -37,6 +38,7 @@ import {
 } from './surfaces/workers-tasks-proofs';
 import { SettingsSurface } from './surfaces/settings';
 import { HowItWorksSurface } from './surfaces/how-it-works';
+import { LandingSurface } from './surfaces/landing-surface';
 import {
   CoreButton,
   CoreInput,
@@ -70,6 +72,7 @@ const utilityNav = [
   ['settings', 'Settings', Settings],
 ] as const;
 const paths: Record<string, string> = {
+  landing: '/',
   pulse: '/pulse',
   rooms: '/rooms',
   messages: '/messages',
@@ -85,7 +88,17 @@ const paths: Record<string, string> = {
   settings: '/settings',
 };
 
-function Surface({ view }: { view: string }) {
+function Surface({
+  view,
+  onLaunch,
+  onNavigate,
+}: {
+  view: string;
+  onLaunch: () => void;
+  onNavigate: (view: string, selectedId?: string) => void;
+}) {
+  if (view === 'landing')
+    return <LandingSurface onLaunch={onLaunch} onNavigate={onNavigate} />;
   if (view === 'rooms') return <RoomsSurface />;
   if (view === 'messages') return <MessagesSurface />;
   if (view === 'agents') return <AgentsSurface />;
@@ -207,13 +220,26 @@ export function CoreMeshApp() {
         <strong>[01] [02] [03] [--]</strong>
       </main>
     );
+
+  if (state.activeView === 'landing') {
+    return (
+      <div className="landing-wrapper">
+        <LandingSurface
+          onLaunch={() => navigate('pulse')}
+          onNavigate={(view, selectedId) => navigate(view, selectedId)}
+        />
+        <NoticeStack />
+      </div>
+    );
+  }
+
   return (
     <main className="app-shell product-shell">
       <header className="topbar">
         <button
           className="brand"
-          onClick={() => navigate('pulse')}
-          aria-label="CoreMesh Pulse"
+          onClick={() => navigate('landing')}
+          aria-label="CoreMesh Landing"
         >
           <span>CORE/</span>
           <span>MESH</span>
@@ -227,6 +253,13 @@ export function CoreMeshApp() {
             : 'TECHNOCORE OFFLINE · LOCAL LAB'}
         </div>
         <div className="top-actions">
+          <button
+            className="landing-shortcut-btn"
+            onClick={() => navigate('landing')}
+          >
+            <Globe2 size={13} />
+            <span>LANDING PAGE</span>
+          </button>
           <span className="agent-count">
             {String(state.agents.length).padStart(2, '0')} AGENTS
           </span>
@@ -265,7 +298,11 @@ export function CoreMeshApp() {
           </div>
         </aside>
         <section className="main-workspace">
-          <Surface view={state.activeView} />
+          <Surface
+            view={state.activeView}
+            onLaunch={() => navigate('pulse')}
+            onNavigate={navigate}
+          />
         </section>
         <aside className="inspector">
           <div className="inspector-head">
@@ -347,33 +384,73 @@ export function CoreMeshApp() {
         </aside>
       </div>
       <footer className="statusbar">
-        <span>
-          TC <b className={state.protocol.connected ? 'ok' : ''}>●</b>
+        <span title="Technocore Protocol Status">
+          TECHNOCORE{' '}
+          <b className={state.protocol.connected ? 'ok' : ''}>
+            ● {state.protocol.connected ? 'LIVE' : 'OFFLINE'}
+          </b>
         </span>
-        <span>
-          RUNTIME{' '}
+        <span title="Active Agents in Mesh">
+          AGENTS{' '}
+          <b className={state.agents.length ? 'ok' : ''}>
+            {state.agents.length} LIVE
+          </b>
+        </span>
+        <span title="Active Bounded Workers">
+          WORKERS{' '}
+          <b className={state.workers.some((w) => w.enabled) ? 'ok' : ''}>
+            {state.workers.filter((w) => w.enabled).length}/
+            {state.workers.length} ACTIVE
+          </b>
+        </span>
+        <span title="Active Tasks State">
+          TASKS{' '}
           <b
             className={
-              state.runtimes.some((runtime) => runtime.status === 'connected')
+              state.tasks.some(
+                (t) => t.status === 'running' || t.status === 'assigned',
+              )
                 ? 'ok'
                 : ''
             }
           >
-            ●
+            {
+              state.tasks.filter(
+                (t) => t.status === 'running' || t.status === 'assigned',
+              ).length
+            }{' '}
+            RUNNING · {state.tasks.length} TOTAL
           </b>
         </span>
-        <span>
-          WORKERS{' '}
+        <span title="Mapped Protocol Rooms">
+          ROOMS <b>{state.rooms.length} MAPPED</b>
+        </span>
+        <span title="Cryptographic Message Signatures">
+          SIGS{' '}
+          <b className={state.messages.some((m) => m.verified) ? 'ok' : ''}>
+            {state.messages.length
+              ? Math.round(
+                  (state.messages.filter((m) => m.verified).length /
+                    state.messages.length) *
+                    100,
+                )
+              : 100}
+            % VERIFIED
+          </b>
+        </span>
+        <span title="Protocol Rate Limits">
+          BUDGET{' '}
           <b>
-            {state.workers.filter((worker) => worker.enabled).length}/
-            {state.workers.length}
+            R:{state.protocol.readBudget} / W:{state.protocol.writeBudget}
           </b>
         </span>
-        <span>
-          READ <b>{state.protocol.readBudget}</b>
-        </span>
-        <span>
-          WRITE <b>{state.protocol.writeBudget}</b>
+        <span title="Session Private Keys">
+          KEYS{' '}
+          <b className={Object.keys(state.unlockedKeys).length > 0 ? 'ok' : ''}>
+            {Object.keys(state.unlockedKeys).length > 0
+              ? 'UNLOCKED (SESSION)'
+              : 'ENCRYPTED AT REST'}
+          </b>
         </span>
         <span className="footer-claim">
           WORKERS AUTOMATE WORK, NOT ACTIVITY.

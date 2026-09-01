@@ -37,6 +37,7 @@ interface CoreMeshState {
   unlockedKeys: Record<string, Uint8Array>;
   unlockedXKeys: Record<string, Uint8Array>;
   providers: Provider[];
+  providerSessionSecrets: Record<string, string>;
   runtimes: RuntimeConnection[];
   agents: Agent[];
   rooms: Room[];
@@ -62,6 +63,7 @@ interface CoreMeshState {
   setUnlockedXKey: (id: string, key?: Uint8Array) => void;
   addProvider: (provider: Provider) => void;
   updateProvider: (id: string, patch: Partial<Provider>) => void;
+  setProviderSessionSecret: (id: string, secret: string) => void;
   addRuntime: (runtime: RuntimeConnection) => void;
   updateRuntime: (id: string, patch: Partial<RuntimeConnection>) => void;
   addAgent: (agent: Agent) => void;
@@ -209,7 +211,8 @@ const seedProviders: Provider[] = [
     kind: 'deepseek',
     endpoint: 'https://api.deepseek.com',
     connected: false,
-    secretRequired: true,
+    secretRequired: false,
+    serverManagedSecret: true,
     models: [
       'deepseek-v4-flash',
       'deepseek-v4-pro',
@@ -244,13 +247,14 @@ const seedRuntimes: RuntimeConnection[] = [
 ];
 
 const defaults = {
-  activeView: 'pulse',
+  activeView: 'landing',
   exploreMode: true,
   onboardingSeen: false,
   identities: [] as Identity[],
   unlockedKeys: {} as Record<string, Uint8Array>,
   unlockedXKeys: {} as Record<string, Uint8Array>,
   providers: seedProviders,
+  providerSessionSecrets: {} as Record<string, string>,
   runtimes: seedRuntimes,
   agents: [] as Agent[],
   rooms: seedRooms,
@@ -360,6 +364,13 @@ export const useCoreMesh = create<CoreMeshState>()(
             item.id === id ? { ...item, ...patch } : item,
           ),
         })),
+      setProviderSessionSecret: (id, secret) =>
+        set((state) => {
+          const providerSessionSecrets = { ...state.providerSessionSecrets };
+          if (secret) providerSessionSecrets[id] = secret;
+          else delete providerSessionSecrets[id];
+          return { providerSessionSecrets };
+        }),
       addRuntime: (runtime) =>
         set((state) => ({ runtimes: [...state.runtimes, runtime] })),
       updateRuntime: (id, patch) =>
@@ -730,10 +741,28 @@ export const useCoreMesh = create<CoreMeshState>()(
     }),
     {
       name: 'coremesh-local-v1',
-      version: 3,
+      version: 5,
       migrate: (persistedState) => {
         const persisted = persistedState as Partial<CoreMeshState>;
-        const providers = persisted.providers || defaults.providers;
+        const hostedKinds = new Set<Provider['kind']>([
+          'openai-compatible',
+          'anthropic',
+          'gemini',
+          'deepseek',
+          'openrouter',
+          'groq',
+          'together',
+        ]);
+        const providers = (persisted.providers || defaults.providers).map(
+          (provider) =>
+            hostedKinds.has(provider.kind)
+              ? {
+                  ...provider,
+                  secretRequired: false,
+                  serverManagedSecret: true,
+                }
+              : provider,
+        );
         const deepSeek = defaults.providers.find(
           (provider) => provider.kind === 'deepseek',
         )!;
@@ -742,6 +771,7 @@ export const useCoreMesh = create<CoreMeshState>()(
           providers: providers.some((provider) => provider.kind === 'deepseek')
             ? providers
             : [deepSeek, ...providers],
+          providerSessionSecrets: {},
           messageAliases: persisted.messageAliases || {},
           protocol: {
             ...defaults.protocol,
@@ -757,6 +787,7 @@ export const useCoreMesh = create<CoreMeshState>()(
         hydrated: undefined,
         unlockedKeys: {},
         unlockedXKeys: {},
+        providerSessionSecrets: {},
         notices: [],
       }),
       onRehydrateStorage: () => (state) => state?.setHydrated(true),

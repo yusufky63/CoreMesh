@@ -3,17 +3,27 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import {
   ArrowDown,
+  ArrowLeft,
+  ArrowRight,
   Bookmark,
+  Bot,
+  Boxes,
+  ChevronDown,
+  ChevronUp,
   Download,
   Eye,
   Filter,
+  KeyRound,
   LockKeyhole,
+  MessageSquare,
   Plus,
   Radio,
   RefreshCw,
   Search,
   Send,
   ShieldCheck,
+  Sparkles,
+  Users,
 } from 'lucide-react';
 import {
   normalizeTechnocoreText,
@@ -34,10 +44,13 @@ import {
   formatTime,
   Glyph,
   Modal,
+  Pagination,
   ProtocolStrip,
   SectionHeader,
   shortDid,
 } from '../common';
+import { QuickUnlockModal } from '../quick-unlock-modal';
+import { KineticMessageConstellation } from '../effects/kinetic-message-constellation';
 
 function nextTechnocoreNonce(
   messages: ProtocolMessage[],
@@ -73,6 +86,10 @@ function downloadRoomExport(name: string, content: string) {
 
 export function PulseSurface() {
   const {
+    identities,
+    unlockedKeys,
+    providers,
+    runtimes,
     agents,
     workers,
     rooms,
@@ -83,38 +100,167 @@ export function PulseSurface() {
     protocol,
     setView,
   } = useCoreMesh();
+  const [showChecklist, setShowChecklist] = useState(true);
+  const navigateTo = (view: string, selectedId?: string) => {
+    setView(view, selectedId);
+    const path = `/${view}`;
+    if (window.location.pathname !== path)
+      window.history.pushState({ view, selectedId }, '', path);
+  };
+
+  const hasIdentity = identities.length > 0;
+  const isUnlocked = identities.some((id) => Boolean(unlockedKeys[id.id]));
+  const hasProvider = providers.length > 0;
+  const hasRuntime =
+    runtimes.some((r) => r.status === 'connected') || runtimes.length > 0;
+  const hasAgent = agents.length > 0;
+  const hasActiveWorker = workers.some((w) => w.enabled);
+  const hasTasksOrReceipts = tasks.length > 0 || receipts.length > 0;
+
+  const steps = [
+    {
+      id: 'identity',
+      step: '01',
+      title: 'IDENTITY & VAULT',
+      icon: KeyRound,
+      done: hasIdentity && isUnlocked,
+      warn: hasIdentity && !isUnlocked,
+      badge: !hasIdentity
+        ? '0/1 CREATED'
+        : isUnlocked
+          ? 'KEY UNLOCKED'
+          : 'LOCKED (SESSION)',
+      desc: !hasIdentity
+        ? 'Create or import your sovereign Ed25519 DID. Keys are encrypted at rest with Argon2id.'
+        : isUnlocked
+          ? `DID active (${identities[0]?.name || 'Identity'}). Unlocked for signing in current session.`
+          : 'Identity created but private key is locked. Unlock in Vault to sign messages or proofs.',
+      action: !hasIdentity
+        ? 'CREATE IDENTITY'
+        : isUnlocked
+          ? 'MANAGE VAULT'
+          : 'UNLOCK KEY',
+      view: 'vault',
+    },
+    {
+      id: 'provider',
+      step: '02',
+      title: 'AI PROVIDER & RUNTIME',
+      icon: Boxes,
+      done: hasProvider || hasRuntime,
+      warn: false,
+      badge: hasProvider
+        ? `${providers[0]?.name || 'PROVIDER'} READY`
+        : 'NEEDS CONFIG',
+      desc: hasProvider
+        ? `${providers[0]?.name} runtime configured. API keys remain session-only.`
+        : 'Connect DeepSeek V4, Claude, or local Ollama. Intelligence is separate from identity.',
+      action: hasProvider ? 'VIEW RUNTIMES' : 'CONNECT DEEPSEEK',
+      view: 'providers',
+    },
+    {
+      id: 'agent',
+      step: '03',
+      title: 'AUTONOMOUS AGENT',
+      icon: Users,
+      done: hasAgent,
+      warn: false,
+      badge: hasAgent ? `${agents.length} AGENTS` : '0/1 CREATED',
+      desc: hasAgent
+        ? `${agents[0]?.name} attached to runtime. Ready for bounded roles.`
+        : 'Define an agent persona, capabilities, and bind it to your cryptographic identity.',
+      action: hasAgent ? 'VIEW AGENTS' : 'CREATE AGENT',
+      view: 'agents',
+    },
+    {
+      id: 'worker',
+      step: '04',
+      title: 'BOUNDED WORKER',
+      icon: Bot,
+      done: hasActiveWorker,
+      warn: workers.length > 0 && !hasActiveWorker,
+      badge: hasActiveWorker
+        ? `${workers.filter((w) => w.enabled).length}/${workers.length} ACTIVE`
+        : workers.length > 0
+          ? 'PAUSED'
+          : '0/1 RUNNING',
+      desc: hasActiveWorker
+        ? 'Workers monitoring rooms with cooldowns, budgets, and operator review gates.'
+        : 'Workers start paused by default for safety. Activate a worker to automate tasks.',
+      action: hasActiveWorker ? 'MANAGE WORKERS' : 'START WORKER',
+      view: 'workers',
+    },
+    {
+      id: 'tasks',
+      step: '05',
+      title: 'COORDINATION & PROOFS',
+      icon: ShieldCheck,
+      done: hasTasksOrReceipts || messages.length > 0,
+      warn: false,
+      badge:
+        receipts.length > 0
+          ? `${receipts.length} PROOFS`
+          : tasks.length > 0
+            ? `${tasks.length} TASKS`
+            : 'STANDBY',
+      desc:
+        receipts.length > 0
+          ? `${receipts.length} work receipt(s) verified with Ed25519 signatures and SHA-256 artifact hashes.`
+          : 'Post signed messages to Technocore rooms, assign tasks, and verify outcomes.',
+      action: tasks.length > 0 ? 'VIEW TASKS' : 'EXPLORE ROOMS',
+      view: tasks.length > 0 ? 'tasks' : 'rooms',
+    },
+  ];
+
+  const completedCount = steps.filter((s) => s.done).length;
+
   const events = useMemo(
     () =>
       [
-        ...messages.slice(-5).map((message) => ({
+        ...messages.slice(-6).map((message) => ({
           at: message.createdAt,
-          type: 'MESSAGE',
+          type: 'MESSAGE' as const,
+          targetView: 'rooms',
+          targetId: message.roomId,
           detail: `${shortDid(message.from)} → ${rooms.find((room) => room.id === message.roomId)?.name || 'room'}`,
           verified: message.verified,
         })),
-        ...tasks.slice(-3).map((task) => ({
+        ...tasks.slice(-4).map((task) => ({
           at: task.createdAt,
-          type: 'TASK',
+          type: 'TASK' as const,
+          targetView: 'tasks',
+          targetId: task.id,
           detail: `${task.id} · ${task.status}`,
           verified: false,
         })),
-        ...runs.slice(0, 3).map((run) => ({
+        ...runs.slice(0, 4).map((run) => ({
           at: run.startedAt,
-          type: 'WORKER',
+          type: 'WORKER' as const,
+          targetView: 'workers',
+          targetId: run.workerId,
           detail: `${run.decision} · ${run.durationMs}ms`,
           verified: run.status === 'success',
         })),
-        ...receipts.slice(-3).map((receipt) => ({
+        ...receipts.slice(-4).map((receipt) => ({
           at: receipt.createdAt,
-          type: 'PROOF',
+          type: 'PROOF' as const,
+          targetView: 'proofs',
+          targetId: receipt.taskId,
           detail: `${receipt.taskId} receipt`,
           verified: true,
         })),
-      ]
-        .sort((a, b) => +new Date(b.at) - +new Date(a.at))
-        .slice(0, 8),
+      ].sort((a, b) => +new Date(b.at) - +new Date(a.at)),
     [messages, tasks, runs, receipts, rooms],
   );
+
+  const [pulsePage, setPulsePage] = useState(1);
+  const EVENTS_PER_PAGE = 8;
+  const totalPulsePages = Math.ceil(events.length / EVENTS_PER_PAGE);
+  const paginatedEvents = events.slice(
+    (pulsePage - 1) * EVENTS_PER_PAGE,
+    pulsePage * EVENTS_PER_PAGE,
+  );
+
   const signedPercent = messages.length
     ? Math.round(
         (messages.filter((message) => message.verified).length /
@@ -150,6 +296,77 @@ export function PulseSurface() {
           ],
         ]}
       />
+
+      {/* ── Onboarding / Readiness Checklist ── */}
+      <section className="onboarding-readiness-card">
+        <div className="readiness-header">
+          <div className="readiness-title-group">
+            <div className="readiness-eyebrow">
+              <span>SYSTEM READINESS & ONBOARDING</span>
+              <span className="readiness-progress-tag">
+                {completedCount === 5
+                  ? '● 5/5 FULLY OPERATIONAL'
+                  : `${completedCount}/5 STEPS READY`}
+              </span>
+            </div>
+            <h3>Operator Setup & Protocol Checklist</h3>
+            <p>
+              Step-by-step workflow to unlock identity, connect intelligence
+              runtimes, start workers, and verify outcomes.
+            </p>
+          </div>
+          <button
+            className="toggle-checklist-btn"
+            onClick={() => setShowChecklist((prev) => !prev)}
+            aria-label="Toggle readiness checklist"
+          >
+            {showChecklist ? (
+              <>
+                <span>COLLAPSE</span>
+                <ChevronUp size={13} />
+              </>
+            ) : (
+              <>
+                <span>EXPAND CHECKLIST</span>
+                <ChevronDown size={13} />
+              </>
+            )}
+          </button>
+        </div>
+
+        {showChecklist && (
+          <div className="readiness-steps-grid">
+            {steps.map((step) => {
+              const Icon = step.icon;
+              return (
+                <div
+                  key={step.id}
+                  className={`readiness-step-item ${step.done ? 'done' : step.warn ? 'warn' : 'pending'}`}
+                >
+                  <div className="step-item-head">
+                    <span className="step-num">{step.step}</span>
+                    <Icon size={14} className="step-icon" />
+                    <strong>{step.title}</strong>
+                    <span
+                      className={`step-badge ${step.done ? 'ok' : step.warn ? 'warn' : ''}`}
+                    >
+                      {step.badge}
+                    </span>
+                  </div>
+                  <p className="step-desc">{step.desc}</p>
+                  <button
+                    className={`step-action-btn ${step.done ? 'secondary' : 'primary'}`}
+                    onClick={() => navigateTo(step.view)}
+                  >
+                    <span>{step.action}</span>
+                    <ArrowRight size={12} />
+                  </button>
+                </div>
+              );
+            })}
+          </div>
+        )}
+      </section>
       <div className="pulse-layout product-pulse">
         <div className="event-ledger">
           <div className="ledger-head">
@@ -158,22 +375,13 @@ export function PulseSurface() {
             <span>SIGNAL</span>
             <span>STATE</span>
           </div>
-          {events.length ? (
-            events.map((event, index) => (
+          {paginatedEvents.length ? (
+            paginatedEvents.map((event, index) => (
               <button
                 className="event-row"
                 key={`${event.at}-${index}`}
-                onClick={() =>
-                  event.type === 'MESSAGE'
-                    ? setView('rooms')
-                    : setView(
-                        event.type === 'WORKER'
-                          ? 'workers'
-                          : event.type === 'TASK'
-                            ? 'tasks'
-                            : 'proofs',
-                      )
-                }
+                onClick={() => navigateTo(event.targetView, event.targetId)}
+                title={`Open ${event.type.toLowerCase()}: ${event.detail}`}
               >
                 <time>{formatTime(event.at)}</time>
                 <span
@@ -193,6 +401,12 @@ export function PulseSurface() {
               body="Connect a protocol endpoint or start in the local lab."
             />
           )}
+          <Pagination
+            currentPage={pulsePage}
+            totalPages={totalPulsePages}
+            totalItems={events.length}
+            onPageChange={setPulsePage}
+          />
           <div className="reading-room">
             <span>
               {protocol.connected ? 'READING PROTOCOL' : 'LOCAL LAB ACTIVE'}
@@ -218,14 +432,13 @@ export function PulseSurface() {
             <span>ROOMS</span>
             <strong>{String(rooms.length).padStart(2, '0')}</strong>
             <small>
-              {rooms.filter((room) => room.source === 'technocore').length}{' '}
-              protocol
+              {rooms.filter((room) => room.kind === 'public').length} public
             </small>
           </div>
           <div>
             <span>SIGNED</span>
             <strong>{signedPercent}%</strong>
-            <small>authorship</small>
+            <small>verified</small>
           </div>
         </aside>
       </div>
@@ -243,7 +456,20 @@ export function RoomsSurface() {
   const [roomName, setRoomName] = useState('');
   const [roomTopic, setRoomTopic] = useState('');
   const [roomKind, setRoomKind] = useState<RoomKind>('public');
-  const [selectedRoomId, setSelectedRoomId] = useState(state.selectedId || '');
+  const [selectedRoomIdOverride, setSelectedRoomIdOverride] = useState<
+    string | null
+  >(null);
+  const selectedRoomId =
+    selectedRoomIdOverride ??
+    (state.selectedId && state.rooms.some((r) => r.id === state.selectedId)
+      ? state.selectedId
+      : '') ??
+    '';
+  const setSelectedRoomId = (id: string) => setSelectedRoomIdOverride(id);
+  const [quickUnlockOpen, setQuickUnlockOpen] = useState(false);
+  const [pendingUnlockAction, setPendingUnlockAction] = useState<
+    'create-room' | 'send-message' | null
+  >(null);
   const [messageText, setMessageText] = useState('');
   const [syncing, setSyncing] = useState(false);
   const [roomLoading, setRoomLoading] = useState(false);
@@ -258,7 +484,8 @@ export function RoomsSurface() {
   const filtered = state.rooms.filter(
     (room) =>
       (filter === 'all' ||
-        (filter === 'bookmarked' && room.bookmarked) ||
+        (filter === 'bookmarked' &&
+          (room.bookmarked || Boolean(room.ownerDid))) ||
         (filter === 'active' && room.messageCount > 0) ||
         (filter === 'new' &&
           new Date(room.createdAt).getTime() >= newRoomCutoff) ||
@@ -266,6 +493,32 @@ export function RoomsSurface() {
         room.kind === filter) &&
       `${room.name} ${room.topic}`.toLowerCase().includes(query.toLowerCase()),
   );
+  const sortedRooms = useMemo(() => {
+    return [...filtered].sort((a, b) => {
+      const aSaved =
+        a.bookmarked || Boolean(a.ownerDid) || a.source === 'local';
+      const bSaved =
+        b.bookmarked || Boolean(b.ownerDid) || b.source === 'local';
+      if (aSaved && !bSaved) return -1;
+      if (!aSaved && bSaved) return 1;
+      if (b.messageCount !== a.messageCount)
+        return b.messageCount - a.messageCount;
+      return new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime();
+    });
+  }, [filtered]);
+
+  const [roomPage, setRoomPage] = useState(1);
+  const ROOMS_PER_PAGE = 20;
+  const totalRoomPages = Math.ceil(sortedRooms.length / ROOMS_PER_PAGE);
+  const paginatedRooms = sortedRooms.slice(
+    (roomPage - 1) * ROOMS_PER_PAGE,
+    roomPage * ROOMS_PER_PAGE,
+  );
+
+  const [roomViewMode, setRoomViewMode] = useState<'timeline' | 'kinetic'>(
+    'timeline',
+  );
+
   const roomMessages = selectedRoom
     ? state.messages.filter(
         (message) =>
@@ -273,7 +526,7 @@ export function RoomsSurface() {
           !state.blockedDids.includes(message.from),
       )
     : [];
-  const visibleRoomMessages = roomMessages.slice(-80);
+  const visibleRoomMessages = roomMessages.slice(-200);
   const activeIdentity = state.identities[0];
   const unlockedKey = activeIdentity
     ? state.unlockedKeys[activeIdentity.id]
@@ -408,11 +661,20 @@ export function RoomsSurface() {
         'Create or import an identity before writing.',
         'error',
       );
-    if (roomKind === 'owned' && !unlockedKey)
+    const signingKey = activeIdentity
+      ? useCoreMesh.getState().unlockedKeys[activeIdentity.id]
+      : undefined;
+    if (roomKind === 'owned' && !signingKey) {
+      if (activeIdentity) {
+        setPendingUnlockAction('create-room');
+        setQuickUnlockOpen(true);
+        return;
+      }
       return state.notify(
         'Unlock the signing identity before claiming a managed room.',
         'error',
       );
+    }
     const room = state.createRoom(
       roomName,
       roomKind,
@@ -422,12 +684,12 @@ export function RoomsSurface() {
     );
     if (state.protocol.connected) {
       const adapter = new HttpTechnocoreAdapter(state.protocol);
-      if (roomKind === 'owned' && unlockedKey) {
+      if (roomKind === 'owned' && signingKey) {
         try {
           await adapter.claimOwnedRoom(
             room.name,
             activeIdentity.did,
-            unlockedKey,
+            signingKey,
           );
         } catch (error) {
           state.addRoom({ ...room, source: 'local' });
@@ -467,13 +729,14 @@ export function RoomsSurface() {
     );
   };
   const send = async () => {
-    if (!selectedRoom || !activeIdentity || !unlockedKey || !messageText.trim())
-      return state.notify(
-        !unlockedKey
-          ? 'Unlock a signing identity in Vault before sending.'
-          : 'A message is required.',
-        'error',
-      );
+    if (!selectedRoom || !activeIdentity || !messageText.trim())
+      return state.notify('A message is required.', 'error');
+    const signingKey = useCoreMesh.getState().unlockedKeys[activeIdentity.id];
+    if (!signingKey) {
+      setPendingUnlockAction('send-message');
+      setQuickUnlockOpen(true);
+      return;
+    }
     if (selectedRoom.source === 'technocore') {
       if (!state.protocol.connected)
         return state.notify('Protocol endpoint is disconnected.', 'error');
@@ -487,7 +750,7 @@ export function RoomsSurface() {
           selectedRoom.name,
           nonce,
           messageText,
-          unlockedKey,
+          signingKey,
         );
         const message: ProtocolMessage = {
           id: randomId('msg'),
@@ -524,7 +787,7 @@ export function RoomsSurface() {
       const message: ProtocolMessage = {
         id: randomId('msg'),
         ...base,
-        signature: signMessage(base, unlockedKey),
+        signature: signMessage(base, signingKey),
         verified: true,
       };
       state.addMessage(message);
@@ -587,17 +850,55 @@ export function RoomsSurface() {
   if (selectedRoom)
     return (
       <>
+        <div className="room-nav-breadcrumb">
+          <button
+            className="room-back-btn"
+            onClick={() => setSelectedRoomId('')}
+            aria-label="Back to all rooms"
+          >
+            <ArrowLeft size={13} />
+            <span>← BROWSE ALL ROOMS</span>
+          </button>
+          <span className="breadcrumb-divider">/</span>
+          <span className="breadcrumb-current">
+            <Radio size={12} />
+            {selectedRoom.name}
+          </span>
+          <span className="room-source-badge">
+            {selectedRoom.source.toUpperCase()}
+          </span>
+        </div>
+
         <SectionHeader
           index="02"
           title={`ROOM/\n${selectedRoom.name.toUpperCase()}`}
           subtitle={selectedRoom.topic}
           action={
             <div className="action-row">
+              <div className="room-mode-toggle">
+                <button
+                  type="button"
+                  className={`room-mode-btn ${roomViewMode === 'timeline' ? 'active' : ''}`}
+                  onClick={() => setRoomViewMode('timeline')}
+                >
+                  <MessageSquare size={11} />
+                  TIMELINE
+                </button>
+                <button
+                  type="button"
+                  className={`room-mode-btn ${roomViewMode === 'kinetic' ? 'active' : ''}`}
+                  onClick={() => setRoomViewMode('kinetic')}
+                >
+                  <Sparkles size={11} />
+                  ORBITAL STREAM
+                </button>
+              </div>
               <CoreButton
                 variant="outline"
                 onClick={() => setSelectedRoomId('')}
               >
-                ← BROWSE
+                <ArrowLeft size={12} />
+                BROWSE
               </CoreButton>
               {selectedRoom.source === 'technocore' && (
                 <CoreButton
@@ -648,77 +949,94 @@ export function RoomsSurface() {
             </div>
           </div>
         )}
-        <div className="room-message-stream">
-          <div className="room-feed-status" aria-live="polite">
-            <span>
-              {selectedRoom.source === 'technocore'
-                ? liveFeedState === 'retrying'
-                  ? 'RECONNECTING · 5S'
-                  : liveFeedState === 'loading'
-                    ? 'LOADING LATEST 50'
-                    : 'LIVE · LONG POLL 10S'
-                : 'LOCAL ROOM'}
-            </span>
-            <span>
-              SHOWING {visibleRoomMessages.length}
-              {roomMessages.length > visibleRoomMessages.length
-                ? ` / ${roomMessages.length}`
-                : ''}
-            </span>
-          </div>
-          <div
-            className="message-feed room-message-feed"
-            ref={feedRef}
-            onScroll={(event) => {
-              const feed = event.currentTarget;
-              const nearBottom =
-                feed.scrollHeight - feed.scrollTop - feed.clientHeight < 96;
-              isNearBottomRef.current = nearBottom;
-              if (nearBottom && newMessageCount) setNewMessageCount(0);
+
+        {/* ── Dual Message View: Kinetic Orbital Stream or Classic Timeline ── */}
+        {roomViewMode === 'kinetic' ? (
+          <KineticMessageConstellation
+            messages={visibleRoomMessages}
+            onReply={(msg) => {
+              setMessageText((prev) =>
+                prev
+                  ? `${prev} @${shortDid(msg.from)} `
+                  : `@${shortDid(msg.from)} `,
+              );
             }}
-          >
-            {!visibleRoomMessages.length && (
-              <div className="room-feed-empty">
-                {roomLoading || liveFeedState === 'loading'
-                  ? 'READING ROOM…'
-                  : 'NO MESSAGES YET · START THE THREAD'}
-              </div>
-            )}
-            {visibleRoomMessages.map((message) => (
-              <article className="message-entry" key={message.id}>
-                <Glyph did={message.from} size={5} />
-                <div>
-                  <header>
-                    <strong>{shortDid(message.from)}</strong>
-                    {message.verified ? (
-                      <span className="signed">
-                        <ShieldCheck size={11} />
-                        SIGNED
-                      </span>
-                    ) : (
-                      <span>UNSIGNED</span>
-                    )}
-                    <time>{formatTime(message.createdAt)}</time>
-                  </header>
-                  <p>{message.text}</p>
-                  <small>
-                    SEQ {message.seq} · NONCE {message.nonce.slice(0, 12)}
-                  </small>
-                </div>
-              </article>
-            ))}
-          </div>
-          {newMessageCount > 0 && (
-            <button
-              className="new-message-jump"
-              type="button"
-              onClick={() => scrollToLatest()}
+          />
+        ) : (
+          <div className="room-message-stream">
+            <div className="room-feed-status" aria-live="polite">
+              <span>
+                {selectedRoom.source === 'technocore'
+                  ? liveFeedState === 'retrying'
+                    ? 'RECONNECTING · 5S'
+                    : liveFeedState === 'loading'
+                      ? 'LOADING LATEST 50'
+                      : 'LIVE · LONG POLL 10S'
+                  : 'LOCAL ROOM'}
+              </span>
+              <span>
+                SHOWING {visibleRoomMessages.length}
+                {roomMessages.length > visibleRoomMessages.length
+                  ? ` / ${roomMessages.length}`
+                  : ''}
+              </span>
+            </div>
+            <div
+              className="message-feed room-message-feed"
+              ref={feedRef}
+              onScroll={(event) => {
+                const feed = event.currentTarget;
+                const nearBottom =
+                  feed.scrollHeight - feed.scrollTop - feed.clientHeight < 96;
+                isNearBottomRef.current = nearBottom;
+                if (nearBottom && newMessageCount) setNewMessageCount(0);
+              }}
             >
-              <ArrowDown size={13} />
-              {newMessageCount} NEW MESSAGE{newMessageCount === 1 ? '' : 'S'}
-            </button>
-          )}
-        </div>
+              {!visibleRoomMessages.length && (
+                <div className="room-feed-empty">
+                  {roomLoading || liveFeedState === 'loading'
+                    ? 'READING ROOM…'
+                    : 'NO MESSAGES YET · START THE THREAD'}
+                </div>
+              )}
+              {visibleRoomMessages.map((message) => (
+                <article className="message-entry" key={message.id}>
+                  <div className="message-glyph-wrap">
+                    <Glyph did={message.from} size={5} />
+                  </div>
+                  <div>
+                    <header>
+                      <strong>{shortDid(message.from)}</strong>
+                      {message.verified ? (
+                        <span className="signed">
+                          <ShieldCheck size={11} />
+                          SIGNED
+                        </span>
+                      ) : (
+                        <span>UNSIGNED</span>
+                      )}
+                      <time>{formatTime(message.createdAt)}</time>
+                    </header>
+                    <p>{message.text}</p>
+                    <small>
+                      SEQ {message.seq} · NONCE {message.nonce.slice(0, 12)}
+                    </small>
+                  </div>
+                </article>
+              ))}
+            </div>
+            {newMessageCount > 0 && (
+              <button
+                className="new-message-jump"
+                type="button"
+                onClick={() => scrollToLatest()}
+              >
+                <ArrowDown size={13} />
+                {newMessageCount} NEW MESSAGE{newMessageCount === 1 ? '' : 'S'}
+              </button>
+            )}
+          </div>
+        )}
         <div className="composer">
           <CoreTextarea
             value={messageText}
@@ -743,6 +1061,20 @@ export function RoomsSurface() {
             </CoreButton>
           </div>
         </div>
+        <QuickUnlockModal
+          open={quickUnlockOpen}
+          onOpenChange={(next) => {
+            setQuickUnlockOpen(next);
+            if (!next) setPendingUnlockAction(null);
+          }}
+          targetIdentityId={activeIdentity?.id}
+          onUnlocked={() => {
+            const action = pendingUnlockAction;
+            setPendingUnlockAction(null);
+            if (action === 'create-room') void createRoom();
+            if (action === 'send-message') void send();
+          }}
+        />
       </>
     );
 
@@ -773,7 +1105,10 @@ export function RoomsSurface() {
           <Search size={13} />
           <CoreInput
             value={query}
-            onChange={(event) => setQuery(event.target.value)}
+            onChange={(event) => {
+              setQuery(event.target.value);
+              setRoomPage(1);
+            }}
             placeholder="Search rooms"
           />
         </div>
@@ -782,21 +1117,24 @@ export function RoomsSurface() {
           {(
             [
               'all',
+              'bookmarked',
               'active',
-              'new',
               'public',
               'owned',
-              'ephemeral',
+              'private',
+              'new',
               'signed-heavy',
-              'bookmarked',
             ] as const
           ).map((item) => (
             <button
               className={filter === item ? 'active' : ''}
-              onClick={() => setFilter(item)}
+              onClick={() => {
+                setFilter(item);
+                setRoomPage(1);
+              }}
               key={item}
             >
-              {item}
+              {item === 'bookmarked' ? 'SAVED / PROJECT' : item.toUpperCase()}
             </button>
           ))}
         </div>
@@ -809,26 +1147,42 @@ export function RoomsSurface() {
           <span>SIGNED</span>
           <span>SOURCE</span>
         </div>
-        {filtered.map((room) => (
-          <button
-            className="matrix-row"
-            onClick={() => loadRoom(room)}
-            key={room.id}
-          >
-            <span>
-              <Radio size={12} />
-              {room.name}
-              {room.bookmarked && <Bookmark size={10} />}
-            </span>
-            <span>{roomKindLabel[room.kind]}</span>
-            <span>{room.messageCount}</span>
-            <span>{room.signedPercent}%</span>
-            <span>
-              {room.source === 'local' ? 'LOCAL' : 'TC'} <Eye size={11} />
-            </span>
-          </button>
-        ))}
+        {paginatedRooms.map((room) => {
+          const isProjectRoom =
+            room.bookmarked ||
+            Boolean(room.ownerDid) ||
+            room.source === 'local';
+          return (
+            <button
+              className={`matrix-row ${isProjectRoom ? 'project-priority' : ''}`}
+              onClick={() => loadRoom(room)}
+              key={room.id}
+            >
+              <span className="room-name-cell">
+                <Radio size={12} className={isProjectRoom ? 'cyan' : ''} />
+                <strong>{room.name}</strong>
+                {isProjectRoom && (
+                  <span className="project-room-tag">
+                    <Bookmark size={9} /> PROJECT
+                  </span>
+                )}
+              </span>
+              <span>{roomKindLabel[room.kind]}</span>
+              <span>{room.messageCount}</span>
+              <span>{room.signedPercent}%</span>
+              <span>
+                {room.source === 'local' ? 'LOCAL' : 'TC'} <Eye size={11} />
+              </span>
+            </button>
+          );
+        })}
       </div>
+      <Pagination
+        currentPage={roomPage}
+        totalPages={totalRoomPages}
+        totalItems={sortedRooms.length}
+        onPageChange={setRoomPage}
+      />
       {!filtered.length && (
         <EmptyState
           title="NO ROOMS MATCH"
@@ -881,6 +1235,20 @@ export function RoomsSurface() {
           </CoreButton>
         </div>
       </Modal>
+      <QuickUnlockModal
+        open={quickUnlockOpen}
+        onOpenChange={(next) => {
+          setQuickUnlockOpen(next);
+          if (!next) setPendingUnlockAction(null);
+        }}
+        targetIdentityId={activeIdentity?.id}
+        onUnlocked={() => {
+          const action = pendingUnlockAction;
+          setPendingUnlockAction(null);
+          if (action === 'create-room') void createRoom();
+          if (action === 'send-message') void send();
+        }}
+      />
     </>
   );
 }

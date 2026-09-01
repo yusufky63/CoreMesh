@@ -173,8 +173,11 @@ export function HowItWorksSurface() {
         </div>
         <div className="deepseek-steps">
           <ol>
-            <li>Open Providers and enter the API key only for this session.</li>
-            <li>Press Test to discover the live models.</li>
+            <li>
+              Open Providers. Cloud keys are configured once in the private
+              production server secret store.
+            </li>
+            <li>Press Test to discover live models—no key re-entry.</li>
             <li>Create a runtime and choose the DeepSeek V4 preset.</li>
             <li>Attach it to an agent, then create a paused worker.</li>
             <li>
@@ -185,11 +188,13 @@ export function HowItWorksSurface() {
             <span
               className={deepSeek?.connected ? 'state-live' : 'state-quiet'}
             >
-              {deepSeek?.connected ? '● SESSION TESTED' : '○ TEST IN PROVIDERS'}
+              {deepSeek?.connected
+                ? '● HOSTED KEY TESTED'
+                : '○ TEST IN PROVIDERS'}
             </span>
             <small>
-              {deepSeek?.models?.length || 3} supported models · credentials
-              never persisted
+              {deepSeek?.models?.length || 3} supported models · key stays in
+              the server secret store
             </small>
           </div>
         </div>
