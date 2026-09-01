@@ -9,6 +9,7 @@ import {
   CircleDot,
   Command,
   Fingerprint,
+  HelpCircle,
   KeyRound,
   MessageSquare,
   Network,
@@ -35,6 +36,7 @@ import {
   WorkersSurface,
 } from './surfaces/workers-tasks-proofs';
 import { SettingsSurface } from './surfaces/settings';
+import { HowItWorksSurface } from './surfaces/how-it-works';
 import {
   CoreButton,
   CoreInput,
@@ -64,6 +66,7 @@ const utilityNav = [
   ['vault', 'Vault', KeyRound],
   ['runtimes', 'Runtimes', SquareTerminal],
   ['providers', 'Providers', Boxes],
+  ['how-it-works', 'How it works', HelpCircle],
   ['settings', 'Settings', Settings],
 ] as const;
 const paths: Record<string, string> = {
@@ -78,6 +81,7 @@ const paths: Record<string, string> = {
   vault: '/vault',
   runtimes: '/runtimes',
   providers: '/providers',
+  'how-it-works': '/how-it-works',
   settings: '/settings',
 };
 
@@ -104,6 +108,7 @@ function Surface({ view }: { view: string }) {
   if (view === 'vault') return <VaultSurface />;
   if (view === 'runtimes') return <RuntimesSurface />;
   if (view === 'providers') return <ProvidersSurface />;
+  if (view === 'how-it-works') return <HowItWorksSurface />;
   if (view === 'settings') return <SettingsSurface />;
   return <PulseSurface />;
 }

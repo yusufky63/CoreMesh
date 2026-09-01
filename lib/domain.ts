@@ -67,6 +67,8 @@ export interface Provider {
   connected: boolean;
   secretRequired: boolean;
   lastTest?: string;
+  lastLatencyMs?: number;
+  models?: string[];
 }
 
 export interface RuntimeConnection {
@@ -80,6 +82,9 @@ export interface RuntimeConnection {
   maxOutput?: number;
   timeout?: number;
   fallbackRuntimeId?: string;
+  thinking?: boolean;
+  reasoningEffort?: 'low' | 'high' | 'max';
+  responseMode?: 'text' | 'json';
   status: 'untested' | 'connected' | 'error';
 }
 

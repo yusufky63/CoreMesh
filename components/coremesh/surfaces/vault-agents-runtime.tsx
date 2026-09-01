@@ -998,8 +998,15 @@ export function ProvidersSurface() {
     state.updateProvider(provider.id, {
       connected: result.ok,
       lastTest: new Date().toISOString(),
+      lastLatencyMs: result.latencyMs,
+      models: result.ok ? result.models : provider.models,
     });
-    state.notify(result.detail, result.ok ? 'success' : 'error');
+    state.notify(
+      result.ok
+        ? `${result.models?.length || 0} models discovered in ${result.latencyMs}ms.`
+        : result.detail,
+      result.ok ? 'success' : 'error',
+    );
     setTesting('');
     setSecrets((items) => ({ ...items, [provider.id]: '' }));
   };
@@ -1036,6 +1043,11 @@ export function ProvidersSurface() {
                 {providerTemplates[provider.kind].contract} ·{' '}
                 {provider.secretRequired ? 'SESSION KEY' : 'NO KEY'}
               </small>
+              {provider.models?.length ? (
+                <small className="provider-models">
+                  {provider.models.slice(0, 3).join(' · ')}
+                </small>
+              ) : null}
               <span
                 className={provider.connected ? 'state-live' : 'state-quiet'}
               >
@@ -1151,6 +1163,29 @@ export function RuntimesSurface() {
   const [maxOutput, setMaxOutput] = useState(1800);
   const [timeout, setTimeout] = useState(45);
   const [fallbackRuntimeId, setFallbackRuntimeId] = useState('');
+  const [thinking, setThinking] = useState(false);
+  const [reasoningEffort, setReasoningEffort] = useState<
+    'low' | 'high' | 'max'
+  >('high');
+  const [responseMode, setResponseMode] = useState<'text' | 'json'>('text');
+  const selectedProvider = state.providers.find(
+    (provider) => provider.id === providerId,
+  );
+  const selectProvider = (nextId: string) => {
+    const provider = state.providers.find((item) => item.id === nextId);
+    setProviderId(nextId);
+    if (provider?.kind === 'deepseek') {
+      setName('DeepSeek V4 Runtime');
+      setType('managed-ai');
+      setModel(provider.models?.[0] || 'deepseek-v4-flash');
+      setTemperature(1);
+      setMaxOutput(4096);
+      setTimeout(90);
+      setThinking(true);
+      setReasoningEffort('high');
+      setResponseMode('text');
+    }
+  };
   return (
     <>
       <SectionHeader
@@ -1208,8 +1243,15 @@ export function RuntimesSurface() {
               <div>
                 <dt>TEMP / MAX</dt>
                 <dd>
-                  {runtime.temperature ?? 0.3} / {runtime.maxOutput ?? 1800}
+                  {runtime.thinking
+                    ? `THINK ${runtime.reasoningEffort || 'high'}`
+                    : (runtime.temperature ?? 0.3)}{' '}
+                  / {runtime.maxOutput ?? 1800}
                 </dd>
+              </div>
+              <div>
+                <dt>OUTPUT</dt>
+                <dd>{(runtime.responseMode || 'text').toUpperCase()}</dd>
               </div>
               <div>
                 <dt>FALLBACK</dt>
@@ -1264,7 +1306,7 @@ export function RuntimesSurface() {
                 <select
                   className="core-select"
                   value={providerId}
-                  onChange={(event) => setProviderId(event.target.value)}
+                  onChange={(event) => selectProvider(event.target.value)}
                 >
                   <option value="">Custom / none</option>
                   {state.providers.map((provider) => (
@@ -1278,8 +1320,16 @@ export function RuntimesSurface() {
                 <CoreInput
                   value={model}
                   onChange={(event) => setModel(event.target.value)}
-                  placeholder="qwen2.5-coder"
+                  placeholder="Choose a discovered model"
+                  list="runtime-models"
                 />
+                <datalist id="runtime-models">
+                  {selectedProvider?.models?.map((item) => (
+                    <option value={item} key={item}>
+                      {item}
+                    </option>
+                  ))}
+                </datalist>
               </Field>
               <Field label="ENDPOINT OVERRIDE">
                 <CoreInput
@@ -1288,17 +1338,64 @@ export function RuntimesSurface() {
                   placeholder="Optional"
                 />
               </Field>
-              <Field label="TEMPERATURE">
-                <CoreInput
-                  type="number"
-                  min="0"
-                  max="2"
-                  step="0.1"
-                  value={temperature}
+              {selectedProvider?.kind === 'deepseek' && (
+                <div className="deepseek-preset full">
+                  <strong>DEEPSEEK V4 RECOMMENDED</strong>
+                  <span>
+                    Flash for fast everyday work · Pro for deeper tasks ·
+                    thinking defaults to high effort.
+                  </span>
+                  <label className="check-row">
+                    <input
+                      type="checkbox"
+                      checked={thinking}
+                      onChange={(event) => setThinking(event.target.checked)}
+                    />
+                    <span>Enable thinking mode</span>
+                  </label>
+                </div>
+              )}
+              {selectedProvider?.kind === 'deepseek' && thinking ? (
+                <Field label="REASONING EFFORT">
+                  <select
+                    className="core-select"
+                    value={reasoningEffort}
+                    onChange={(event) =>
+                      setReasoningEffort(
+                        event.target.value as 'low' | 'high' | 'max',
+                      )
+                    }
+                  >
+                    <option value="low">Low · faster</option>
+                    <option value="high">High · recommended</option>
+                    <option value="max">Max · deepest</option>
+                  </select>
+                </Field>
+              ) : (
+                <Field label="TEMPERATURE">
+                  <CoreInput
+                    type="number"
+                    min="0"
+                    max="2"
+                    step="0.1"
+                    value={temperature}
+                    onChange={(event) =>
+                      setTemperature(Number(event.target.value))
+                    }
+                  />
+                </Field>
+              )}
+              <Field label="OUTPUT FORMAT">
+                <select
+                  className="core-select"
+                  value={responseMode}
                   onChange={(event) =>
-                    setTemperature(Number(event.target.value))
+                    setResponseMode(event.target.value as 'text' | 'json')
                   }
-                />
+                >
+                  <option value="text">Readable text</option>
+                  <option value="json">Strict JSON</option>
+                </select>
               </Field>
               <Field label="MAX OUTPUT TOKENS">
                 <CoreInput
@@ -1345,6 +1442,13 @@ export function RuntimesSurface() {
                 maxOutput,
                 timeout,
                 fallbackRuntimeId: fallbackRuntimeId || undefined,
+                thinking:
+                  selectedProvider?.kind === 'deepseek' ? thinking : undefined,
+                reasoningEffort:
+                  selectedProvider?.kind === 'deepseek' && thinking
+                    ? reasoningEffort
+                    : undefined,
+                responseMode,
                 status: type === 'identity-only' ? 'connected' : 'untested',
               });
               setOpen(false);

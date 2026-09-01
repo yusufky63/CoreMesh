@@ -2659,6 +2659,213 @@ h1 {
   font-size: 10px;
   line-height: 1.5;
 }
+.provider-models {
+  display: block;
+  margin-top: 7px;
+  color: var(--signal-cyan) !important;
+  overflow-wrap: anywhere;
+}
+.deepseek-preset {
+  border: 1px solid color-mix(in srgb, var(--signal-cyan) 45%, var(--line));
+  background: color-mix(in srgb, var(--signal-cyan) 6%, transparent);
+  padding: 13px;
+  display: grid;
+  gap: 7px;
+}
+.deepseek-preset > strong,
+.how-intro span,
+.deepseek-guide header span,
+.tested-contracts > div > span {
+  color: var(--signal-cyan);
+  font: 700 9px/1.2 var(--font-mono);
+  letter-spacing: 0.12em;
+}
+.deepseek-preset > span {
+  color: var(--text-muted);
+  font-size: 11px;
+  line-height: 1.5;
+}
+.how-intro {
+  margin-top: 26px;
+  padding: 22px 0;
+  border-block: 1px solid var(--line);
+  display: grid;
+  grid-template-columns: minmax(250px, 0.8fr) minmax(300px, 1.2fr);
+  gap: 42px;
+  align-items: end;
+}
+.how-intro h2,
+.deepseek-guide h2,
+.tested-contracts h2 {
+  margin: 8px 0 0;
+  font-size: clamp(22px, 2.4vw, 34px);
+  line-height: 1.06;
+  letter-spacing: -0.04em;
+}
+.how-intro p,
+.tested-contracts p {
+  margin: 0;
+  color: var(--text-muted);
+  font-size: 12px;
+  line-height: 1.7;
+}
+.how-flow {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+}
+.how-flow li {
+  border-bottom: 1px solid var(--line);
+}
+.how-flow li:nth-child(odd) {
+  border-right: 1px solid var(--line);
+}
+.how-flow button {
+  width: 100%;
+  min-height: 118px;
+  padding: 18px;
+  border: 0;
+  background: transparent;
+  color: var(--text);
+  display: grid;
+  grid-template-columns: 28px 1fr 18px;
+  gap: 12px;
+  align-items: start;
+  text-align: left;
+  transition:
+    background 160ms ease,
+    color 160ms ease;
+}
+.how-flow button:hover,
+.how-flow button:focus-visible {
+  background: color-mix(in srgb, var(--signal-cyan) 7%, transparent);
+  color: var(--signal-cyan);
+  outline: none;
+}
+.how-flow button span {
+  display: grid;
+  gap: 8px;
+}
+.how-flow button strong {
+  font-size: 13px;
+}
+.how-flow button small {
+  color: var(--text-muted);
+  font-size: 11px;
+  line-height: 1.55;
+}
+.deepseek-guide {
+  margin-top: 32px;
+  border: 1px solid var(--line-strong);
+  background: color-mix(in srgb, var(--panel) 88%, var(--signal-cyan) 3%);
+}
+.deepseek-guide > header {
+  padding: 20px;
+  border-bottom: 1px solid var(--line);
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+}
+.deepseek-guide-grid {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+}
+.deepseek-guide-grid > div {
+  padding: 18px;
+  border-right: 1px solid var(--line);
+  display: grid;
+  align-content: start;
+  gap: 8px;
+}
+.deepseek-guide-grid > div:last-child {
+  border-right: 0;
+}
+.deepseek-guide-grid strong,
+.trust-boundary strong {
+  font-size: 11px;
+  letter-spacing: 0.04em;
+}
+.deepseek-guide-grid code {
+  color: var(--signal-cyan);
+  font: 600 10px/1.4 var(--font-mono);
+  overflow-wrap: anywhere;
+}
+.deepseek-guide-grid p,
+.trust-boundary p {
+  margin: 0;
+  color: var(--text-muted);
+  font-size: 11px;
+  line-height: 1.55;
+}
+.deepseek-steps {
+  border-top: 1px solid var(--line);
+  padding: 18px;
+  display: grid;
+  grid-template-columns: 1.3fr 0.7fr;
+  gap: 30px;
+  align-items: end;
+}
+.deepseek-steps ol {
+  margin: 0;
+  padding-left: 18px;
+  color: var(--text-muted);
+  font-size: 11px;
+  line-height: 1.8;
+}
+.deepseek-status {
+  display: grid;
+  gap: 7px;
+  justify-items: end;
+  text-align: right;
+}
+.deepseek-status small {
+  color: var(--text-muted);
+  font-size: 9px;
+}
+.tested-contracts {
+  margin-top: 32px;
+  display: grid;
+  grid-template-columns: minmax(280px, 1.2fr) minmax(250px, 0.8fr);
+  gap: 48px;
+  padding: 24px 0;
+  border-block: 1px solid var(--line);
+}
+.tested-contracts ul {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 9px;
+}
+.tested-contracts li {
+  color: var(--text-muted);
+  font-size: 10px;
+  display: flex;
+  gap: 7px;
+  align-items: center;
+}
+.tested-contracts li svg {
+  color: var(--signal-cyan);
+  flex: 0 0 auto;
+}
+.trust-boundary {
+  margin: 24px 0 36px;
+  padding: 17px;
+  border: 1px solid color-mix(in srgb, var(--warning) 45%, var(--line));
+  display: grid;
+  grid-template-columns: 28px 1fr;
+  gap: 12px;
+}
+.trust-boundary > svg {
+  color: var(--warning);
+}
+.trust-boundary div {
+  display: grid;
+  gap: 6px;
+}
 .independence-note {
   margin: 0;
   color: var(--text-muted);
@@ -2830,6 +3037,30 @@ h1 {
   }
   .provider-actions {
     grid-column: 1/-1;
+  }
+  .how-intro,
+  .deepseek-steps,
+  .tested-contracts {
+    grid-template-columns: 1fr;
+    gap: 20px;
+  }
+  .how-flow,
+  .deepseek-guide-grid {
+    grid-template-columns: 1fr;
+  }
+  .how-flow li:nth-child(odd),
+  .deepseek-guide-grid > div {
+    border-right: 0;
+  }
+  .deepseek-guide-grid > div {
+    border-bottom: 1px solid var(--line);
+  }
+  .deepseek-guide-grid > div:last-child {
+    border-bottom: 0;
+  }
+  .deepseek-status {
+    justify-items: start;
+    text-align: left;
   }
   .onboarding-grid {
     grid-template-columns: 1fr;

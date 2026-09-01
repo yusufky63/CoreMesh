@@ -1,6 +1,10 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { ed25519 } from '@noble/curves/ed25519.js';
-import { HttpAgentRuntime, HttpTechnocoreAdapter } from './adapters';
+import {
+  HttpAgentRuntime,
+  HttpTechnocoreAdapter,
+  executeAgentWithFallback,
+} from './adapters';
 import {
   bytesToBase64,
   bytesToBase64Url,
@@ -344,5 +348,164 @@ describe('Agent runtime provider contracts', () => {
     expect(health.ok).toBe(false);
     expect(health.detail).toContain('session API key');
     expect(fetchMock).not.toHaveBeenCalled();
+  });
+
+  it('discovers DeepSeek models and uses the V4 thinking contract', async () => {
+    const deepSeekProvider: Provider = {
+      id: 'provider_deepseek',
+      name: 'DeepSeek',
+      kind: 'deepseek',
+      endpoint: 'https://api.deepseek.com',
+      connected: false,
+      secretRequired: true,
+    };
+    const deepSeekRuntime: RuntimeConnection = {
+      id: 'runtime_deepseek',
+      type: 'managed-ai',
+      name: 'DeepSeek V4',
+      providerId: deepSeekProvider.id,
+      model: 'deepseek-v4-flash',
+      thinking: true,
+      reasoningEffort: 'high',
+      responseMode: 'json',
+      maxOutput: 4096,
+      timeout: 90,
+      status: 'untested',
+    };
+    const fetchMock = vi
+      .fn()
+      .mockResolvedValueOnce(
+        new Response(
+          JSON.stringify({
+            data: [{ id: 'deepseek-v4-flash' }, { id: 'deepseek-v4-pro' }],
+          }),
+          { headers: { 'content-type': 'application/json' } },
+        ),
+      )
+      .mockResolvedValueOnce(
+        new Response(
+          JSON.stringify({
+            model: 'deepseek-v4-flash',
+            choices: [{ message: { content: '{"decision":"review"}' } }],
+            usage: {
+              total_tokens: 61,
+              prompt_cache_hit_tokens: 12,
+              completion_tokens_details: { reasoning_tokens: 24 },
+            },
+          }),
+          { headers: { 'content-type': 'application/json' } },
+        ),
+      );
+    vi.stubGlobal('fetch', fetchMock);
+
+    const adapter = new HttpAgentRuntime(
+      deepSeekRuntime,
+      deepSeekProvider,
+      'session-secret',
+    );
+    const health = await adapter.test();
+    const result = await adapter.execute({
+      objective: 'Return valid json.',
+      system: ['Use the requested schema.'],
+      context: 'Untrusted room context.',
+      userId: 'agent:unsafe id',
+    });
+    const [modelsUrl] = fetchMock.mock.calls[0];
+    const [chatUrl, chatInit] = fetchMock.mock.calls[1];
+    const body = JSON.parse(
+      typeof chatInit?.body === 'string' ? chatInit.body : '',
+    );
+
+    expect(requestUrl(modelsUrl)).toBe('https://api.deepseek.com/models');
+    expect(health.models).toEqual(['deepseek-v4-flash', 'deepseek-v4-pro']);
+    expect(requestUrl(chatUrl)).toBe(
+      'https://api.deepseek.com/chat/completions',
+    );
+    expect(body).toMatchObject({
+      model: 'deepseek-v4-flash',
+      thinking: { type: 'enabled' },
+      reasoning_effort: 'high',
+      response_format: { type: 'json_object' },
+      user_id: 'agent-unsafe-id',
+    });
+    expect(body.temperature).toBeUndefined();
+    expect(result).toMatchObject({
+      tokens: 61,
+      reasoningTokens: 24,
+      cachedTokens: 12,
+    });
+  });
+
+  it('executes the configured fallback after a primary runtime failure', async () => {
+    const providers: Provider[] = [
+      {
+        id: 'provider_primary',
+        name: 'Primary',
+        kind: 'custom-http',
+        endpoint: 'https://primary.example/v1',
+        connected: true,
+        secretRequired: false,
+      },
+      {
+        id: 'provider_fallback',
+        name: 'Fallback',
+        kind: 'custom-http',
+        endpoint: 'https://fallback.example/v1',
+        connected: true,
+        secretRequired: false,
+      },
+    ];
+    const runtimes: RuntimeConnection[] = [
+      {
+        id: 'runtime_primary',
+        type: 'managed-ai',
+        name: 'Primary',
+        providerId: providers[0].id,
+        model: 'primary-model',
+        fallbackRuntimeId: 'runtime_fallback',
+        status: 'connected',
+      },
+      {
+        id: 'runtime_fallback',
+        type: 'managed-ai',
+        name: 'Fallback',
+        providerId: providers[1].id,
+        model: 'fallback-model',
+        status: 'connected',
+      },
+    ];
+    const fetchMock = vi
+      .fn()
+      .mockResolvedValueOnce(new Response('unavailable', { status: 503 }))
+      .mockResolvedValueOnce(
+        new Response(
+          JSON.stringify({
+            model: 'fallback-model',
+            choices: [{ message: { content: 'fallback result' } }],
+            usage: { total_tokens: 8 },
+          }),
+          { headers: { 'content-type': 'application/json' } },
+        ),
+      );
+    vi.stubGlobal('fetch', fetchMock);
+
+    const execution = await executeAgentWithFallback(
+      runtimes[0],
+      runtimes,
+      providers,
+      undefined,
+      {
+        objective: 'Run the job.',
+        system: ['Stay bounded.'],
+        context: 'No room messages.',
+      },
+    );
+
+    expect(execution.usedFallback).toBe(true);
+    expect(execution.runtime.id).toBe('runtime_fallback');
+    expect(execution.result.text).toBe('fallback result');
+    expect(requestUrl(fetchMock.mock.calls[1][0])).toBe(
+      'https://fallback.example/v1/chat/completions',
+    );
   });
 });

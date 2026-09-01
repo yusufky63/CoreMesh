@@ -426,11 +426,15 @@ export interface AgentExecutionInput {
   context: string;
   maxOutput?: number;
   temperature?: number;
+  userId?: string;
+  responseMode?: 'text' | 'json';
 }
 export interface AgentExecutionResult {
   text: string;
   model: string;
   tokens?: number;
+  reasoningTokens?: number;
+  cachedTokens?: number;
   latencyMs: number;
 }
 
@@ -451,6 +455,11 @@ export class HttpAgentRuntime implements AgentRuntime {
       /\/$/,
       '',
     );
+  }
+  private requestUrl(path: '/models' | '/chat/completions') {
+    if (this.provider?.kind === 'deepseek' && typeof window !== 'undefined')
+      return path === '/models' ? '/api/deepseek/models' : '/api/deepseek/chat';
+    return `${this.endpoint()}${path}`;
   }
   private headers() {
     if (this.provider?.secretRequired && !this.sessionSecret)
@@ -475,7 +484,7 @@ export class HttpAgentRuntime implements AgentRuntime {
       if (!endpoint) throw new Error('Endpoint missing.');
       const isOllama = this.provider?.kind === 'ollama';
       const response = await checkedFetch(
-        `${endpoint}${isOllama ? '/api/tags' : '/models'}`,
+        isOllama ? `${endpoint}/api/tags` : this.requestUrl('/models'),
         { headers: this.headers() },
         this.runtime.timeout ? this.runtime.timeout * 1000 : 10_000,
       );
@@ -578,37 +587,118 @@ export class HttpAgentRuntime implements AgentRuntime {
         latencyMs: Math.round(performance.now() - started),
       };
     }
+    const isDeepSeek = this.provider?.kind === 'deepseek';
+    const thinking = this.runtime.thinking ?? false;
+    const responseMode =
+      input.responseMode || this.runtime.responseMode || 'text';
+    const requestBody: Record<string, unknown> = {
+      model,
+      max_tokens: input.maxOutput ?? this.runtime.maxOutput ?? 1800,
+      messages: [
+        { role: 'system', content: system },
+        { role: 'user', content: input.objective },
+      ],
+    };
+    if (isDeepSeek) {
+      requestBody.thinking = { type: thinking ? 'enabled' : 'disabled' };
+      if (thinking)
+        requestBody.reasoning_effort = this.runtime.reasoningEffort || 'high';
+      else
+        requestBody.temperature =
+          input.temperature ?? this.runtime.temperature ?? 1;
+      if (input.userId)
+        requestBody.user_id = input.userId
+          .replace(/[^a-zA-Z0-9\-_]/gu, '-')
+          .slice(0, 512);
+    } else {
+      requestBody.temperature =
+        input.temperature ?? this.runtime.temperature ?? 0.3;
+    }
+    if (responseMode === 'json')
+      requestBody.response_format = { type: 'json_object' };
     const body = (await (
       await checkedFetch(
-        `${endpoint}/chat/completions`,
+        this.requestUrl('/chat/completions'),
         {
           method: 'POST',
           headers: this.headers(),
-          body: JSON.stringify({
-            model,
-            temperature: input.temperature ?? this.runtime.temperature ?? 0.3,
-            max_tokens: input.maxOutput ?? this.runtime.maxOutput ?? 1800,
-            messages: [
-              { role: 'system', content: system },
-              { role: 'user', content: input.objective },
-            ],
-          }),
+          body: JSON.stringify(requestBody),
         },
         (this.runtime.timeout || 45) * 1000,
       )
     ).json()) as {
-      choices?: { message?: { content?: string } }[];
-      usage?: { total_tokens?: number };
+      choices?: {
+        message?: { content?: string; reasoning_content?: string };
+      }[];
+      usage?: {
+        total_tokens?: number;
+        prompt_cache_hit_tokens?: number;
+        completion_tokens_details?: { reasoning_tokens?: number };
+      };
       model?: string;
     };
+    const text = body.choices?.[0]?.message?.content || '';
+    if (!text) throw new Error('The runtime returned an empty response.');
     return {
-      text: body.choices?.[0]?.message?.content || '',
+      text,
       model: body.model || model,
       tokens: body.usage?.total_tokens,
+      reasoningTokens: body.usage?.completion_tokens_details?.reasoning_tokens,
+      cachedTokens: body.usage?.prompt_cache_hit_tokens,
       latencyMs: Math.round(performance.now() - started),
     };
   }
   async capabilities(): Promise<string[]> {
     return ['generate', 'classify', 'research', 'summarize'];
+  }
+}
+
+export async function executeAgentWithFallback(
+  primary: RuntimeConnection,
+  runtimes: RuntimeConnection[],
+  providers: Provider[],
+  sessionSecret: string | undefined,
+  input: AgentExecutionInput,
+) {
+  const primaryProvider = providers.find(
+    (provider) => provider.id === primary.providerId,
+  );
+  try {
+    const result = await new HttpAgentRuntime(
+      primary,
+      primaryProvider,
+      sessionSecret,
+    ).execute(input);
+    return {
+      result,
+      runtime: primary,
+      provider: primaryProvider,
+      usedFallback: false,
+    };
+  } catch (primaryError) {
+    const fallbackRuntime = runtimes.find(
+      (runtime) => runtime.id === primary.fallbackRuntimeId,
+    );
+    if (!fallbackRuntime || fallbackRuntime.type === 'identity-only')
+      throw primaryError;
+    const fallbackProvider = providers.find(
+      (provider) => provider.id === fallbackRuntime.providerId,
+    );
+    const result = await new HttpAgentRuntime(
+      fallbackRuntime,
+      fallbackProvider,
+      sessionSecret,
+    ).execute({
+      ...input,
+      maxOutput: fallbackRuntime.maxOutput,
+      temperature: fallbackRuntime.temperature,
+      responseMode: fallbackRuntime.responseMode,
+    });
+    return {
+      result,
+      runtime: fallbackRuntime,
+      provider: fallbackProvider,
+      usedFallback: true,
+    };
   }
 }

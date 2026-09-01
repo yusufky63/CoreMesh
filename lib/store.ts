@@ -204,6 +204,19 @@ const seedMessages: ProtocolMessage[] = [
 
 const seedProviders: Provider[] = [
   {
+    id: 'provider_deepseek',
+    name: 'DeepSeek',
+    kind: 'deepseek',
+    endpoint: 'https://api.deepseek.com',
+    connected: false,
+    secretRequired: true,
+    models: [
+      'deepseek-v4-flash',
+      'deepseek-v4-pro',
+      'deepseek-v4-flash-vision-exp',
+    ],
+  },
+  {
     id: 'provider_lmstudio',
     name: 'Local LM Studio',
     kind: 'lm-studio',
@@ -717,11 +730,18 @@ export const useCoreMesh = create<CoreMeshState>()(
     }),
     {
       name: 'coremesh-local-v1',
-      version: 2,
+      version: 3,
       migrate: (persistedState) => {
         const persisted = persistedState as Partial<CoreMeshState>;
+        const providers = persisted.providers || defaults.providers;
+        const deepSeek = defaults.providers.find(
+          (provider) => provider.kind === 'deepseek',
+        )!;
         return {
           ...persisted,
+          providers: providers.some((provider) => provider.kind === 'deepseek')
+            ? providers
+            : [deepSeek, ...providers],
           messageAliases: persisted.messageAliases || {},
           protocol: {
             ...defaults.protocol,
