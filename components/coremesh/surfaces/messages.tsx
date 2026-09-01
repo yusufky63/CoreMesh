@@ -6,6 +6,7 @@ import {
   Check,
   KeyRound,
   LockKeyhole,
+  MoreHorizontal,
   Pencil,
   Plus,
   RefreshCw,
@@ -44,6 +45,9 @@ function isDirectMessageRoom(roomId: string, roomIds: Set<string>) {
 export function MessagesSurface() {
   const state = useCoreMesh();
   const [composeOpen, setComposeOpen] = useState(false);
+  const [contactOpen, setContactOpen] = useState(false);
+  const [detailsOpen, setDetailsOpen] = useState(false);
+  const [contactDid, setContactDid] = useState('');
   const [selectedDid, setSelectedDid] = useState(() => {
     if (state.selectedId?.startsWith('did:')) return state.selectedId;
     const identityDids = new Set(
@@ -186,6 +190,26 @@ export function MessagesSurface() {
       alias.trim() ? 'Local nickname saved.' : 'Local nickname removed.',
       'success',
     );
+  };
+  const openComposer = (did = '') => {
+    setRecipientDid(did);
+    setNickname(did ? state.messageAliases[did] || '' : '');
+    setMailbox('');
+    setPeerXKey(did ? state.peerXKeys[did] || '' : '');
+    setText('');
+    setComposeOpen(true);
+  };
+  const openContact = (did: string) => {
+    setContactDid(did);
+    setAliasDrafts((items) => ({
+      ...items,
+      [did]: state.messageAliases[did] || '',
+    }));
+    setContactOpen(true);
+  };
+  const openDetails = (messageId: string) => {
+    setSelectedMessageId(messageId);
+    setDetailsOpen(true);
   };
   const latestFor = (did: string) =>
     state.messages
@@ -443,7 +467,7 @@ export function MessagesSurface() {
               SYNC MAILBOX
             </CoreButton>
             <CoreButton
-              onClick={() => setComposeOpen(true)}
+              onClick={() => openComposer()}
               disabled={!state.identities.length}
             >
               <Plus size={13} />
@@ -504,6 +528,10 @@ export function MessagesSurface() {
       )}
       <div className="messages-layout">
         <aside className="thread-list">
+          <div className="conversation-list-header">
+            <strong>CONVERSATIONS</strong>
+            <span>{visibleThreads.length}</span>
+          </div>
           <button
             className={selectedDid === SENT_THREAD ? 'active' : ''}
             onClick={() => {
@@ -511,38 +539,44 @@ export function MessagesSurface() {
               setSelectedMessageId('');
             }}
           >
-            <span className="sent-thread-icon">
-              <Send size={14} />
+            <span className="dm-avatar sent">
+              <Send size={13} />
             </span>
-            <span>
-              <strong>SENT</strong>
-              <small>
-                {sentMessages.length} SIGNED MESSAGE
-                {sentMessages.length === 1 ? '' : 'S'}
-              </small>
+            <span className="thread-summary">
+              <span>
+                <strong>Sent messages</strong>
+                <time>{sentMessages.length}</time>
+              </span>
+              <small>All outgoing messages</small>
             </span>
           </button>
-          {visibleThreads.map((did) => (
-            <button
-              className={selectedDid === did ? 'active' : ''}
-              onClick={() => {
-                setSelectedDid(did);
-                setSelectedMessageId('');
-              }}
-              key={did}
-            >
-              <Glyph did={did} size={2} />
-              <span>
-                <strong>{displayName(did)}</strong>
-                <small>
-                  {state.messageAliases[did] ? `${shortDid(did)} · ` : ''}
-                  {latestFor(did)
-                    ? `${latestFor(did)?.from && ownDids.includes(latestFor(did)!.from) ? 'YOU' : 'PEER'} · ${formatTime(latestFor(did)!.createdAt)}`
-                    : 'SIGNED THREAD'}
-                </small>
-              </span>
-            </button>
-          ))}
+          {visibleThreads.map((did) => {
+            const latest = latestFor(did);
+            const preview = latest
+              ? `${ownDids.includes(latest.from) ? 'You: ' : ''}${latest.encrypted ? 'Encrypted message' : latest.text}`
+              : 'No messages yet';
+            return (
+              <button
+                className={selectedDid === did ? 'active' : ''}
+                onClick={() => {
+                  setSelectedDid(did);
+                  setSelectedMessageId('');
+                }}
+                key={did}
+              >
+                <span className="dm-avatar">
+                  <Glyph did={did} size={1} />
+                </span>
+                <span className="thread-summary">
+                  <span>
+                    <strong>{displayName(did)}</strong>
+                    {latest && <time>{formatTime(latest.createdAt)}</time>}
+                  </span>
+                  <small>{preview}</small>
+                </span>
+              </button>
+            );
+          })}
           {!visibleThreads.length && <p>No accepted threads.</p>}
         </aside>
         <section className="thread-panel">
@@ -550,11 +584,13 @@ export function MessagesSurface() {
             <>
               <header>
                 {selectedDid === SENT_THREAD ? (
-                  <span className="sent-thread-icon">
-                    <Send size={14} />
+                  <span className="dm-avatar sent">
+                    <Send size={13} />
                   </span>
                 ) : (
-                  <Glyph did={selectedDid} size={2} />
+                  <span className="dm-avatar">
+                    <Glyph did={selectedDid} size={1} />
+                  </span>
                 )}
                 <div>
                   <strong>
@@ -564,163 +600,130 @@ export function MessagesSurface() {
                   </strong>
                   <span>
                     {selectedDid === SENT_THREAD
-                      ? 'ALL OUTGOING SIGNED RECORDS'
-                      : '✓ SIGNED ≠ ★ TRUSTED'}
+                      ? `${sentMessages.length} outgoing messages`
+                      : state.messageAliases[selectedDid]
+                        ? shortDid(selectedDid)
+                        : 'Signed conversation'}
                   </span>
                 </div>
                 {selectedDid !== SENT_THREAD && (
-                  <CoreButton
-                    variant="outline"
-                    onClick={() => state.toggleBlock(selectedDid)}
-                  >
-                    <Ban size={12} />
-                    BLOCK
-                  </CoreButton>
+                  <div className="thread-header-actions">
+                    <CoreButton
+                      variant="outline"
+                      className="message-icon-button"
+                      onClick={() => openComposer(selectedDid)}
+                      aria-label="Message this contact"
+                      title="Message"
+                    >
+                      <Send size={13} />
+                    </CoreButton>
+                    <CoreButton
+                      variant="outline"
+                      className="message-icon-button"
+                      onClick={() => openContact(selectedDid)}
+                      aria-label="Edit contact nickname"
+                      title="Edit nickname"
+                    >
+                      <Pencil size={13} />
+                    </CoreButton>
+                    <CoreButton
+                      variant="outline"
+                      className="message-icon-button"
+                      onClick={() => state.toggleBlock(selectedDid)}
+                      aria-label="Block contact"
+                      title="Block"
+                    >
+                      <Ban size={13} />
+                    </CoreButton>
+                  </div>
                 )}
               </header>
-              {selectedDid !== SENT_THREAD && (
-                <div className="thread-alias-bar">
-                  <Pencil size={12} />
-                  <span>LOCAL NICKNAME</span>
-                  <CoreInput
-                    value={
-                      aliasDrafts[selectedDid] ??
-                      state.messageAliases[selectedDid] ??
-                      ''
-                    }
-                    onChange={(event) =>
-                      setAliasDrafts((items) => ({
-                        ...items,
-                        [selectedDid]: event.target.value,
-                      }))
-                    }
-                    placeholder="e.g. Research partner"
-                    maxLength={40}
-                  />
-                  <CoreButton
-                    variant="outline"
-                    onClick={() =>
-                      saveAlias(selectedDid, aliasDrafts[selectedDid] || '')
-                    }
-                  >
-                    SAVE
-                  </CoreButton>
-                  <small>Only visible on this device.</small>
-                </div>
-              )}
               <div className="message-feed compact" ref={feedRef}>
-                {threadMessages.map((message) => (
-                  <article
-                    className={`message-entry direct-message-row${selectedMessageId === message.id ? ' selected' : ''}`}
-                    key={message.id}
-                  >
-                    <Glyph did={message.from} size={1} />
-                    <div>
-                      <header>
-                        <strong>
-                          {ownDids.includes(message.from)
-                            ? 'YOU'
-                            : displayName(message.from)}
-                        </strong>
-                        {ownDids.includes(message.from) &&
-                          message.recipientDid && (
-                            <span className="message-recipient">
-                              TO {displayName(message.recipientDid)}
-                            </span>
-                          )}
-                        {message.verified && (
-                          <span className="signed">SIGNED</span>
-                        )}
-                        <button
-                          className="raw-message-button"
-                          onClick={() => setSelectedMessageId(message.id)}
-                        >
-                          DETAILS
-                        </button>
-                        <time>{formatTime(message.createdAt)}</time>
-                      </header>
-                      {message.encrypted ? (
-                        decrypted[message.id] ? (
-                          <p>{decrypted[message.id]}</p>
-                        ) : (
-                          <p className="encrypted-message">
-                            <LockKeyhole size={13} /> E2E ENCRYPTED{' '}
-                            <button
-                              onClick={async () => {
-                                const xKey =
-                                  activeIdentity &&
-                                  state.unlockedXKeys[activeIdentity.id];
-                                const peerKey = state.peerXKeys[selectedDid];
-                                if (!xKey || !peerKey)
-                                  return state.notify(
-                                    'Unlock your X25519 key and provide the peer public key.',
-                                    'error',
-                                  );
-                                try {
-                                  const plaintext = await decryptDirectMessage(
-                                    message.text,
-                                    xKey,
-                                    peerKey,
-                                  );
-                                  setDecrypted((items) => ({
-                                    ...items,
-                                    [message.id]: plaintext,
-                                  }));
-                                } catch {
-                                  state.notify(
-                                    'E2E decryption failed.',
-                                    'error',
-                                  );
-                                }
-                              }}
-                            >
-                              DECRYPT
-                            </button>
-                          </p>
-                        )
-                      ) : (
-                        <p>{message.text}</p>
+                {threadMessages.map((message) => {
+                  const mine = ownDids.includes(message.from);
+                  const peerDid = mine ? message.recipientDid : message.from;
+                  return (
+                    <article
+                      className={`dm-bubble-row ${mine ? 'mine' : 'theirs'}`}
+                      key={message.id}
+                    >
+                      {!mine && (
+                        <span className="dm-avatar message-avatar">
+                          <Glyph did={message.from} size={1} />
+                        </span>
                       )}
-                    </div>
-                  </article>
-                ))}
+                      <div className="dm-message-group">
+                        {selectedDid === SENT_THREAD && peerDid && (
+                          <span className="dm-recipient-label">
+                            To {displayName(peerDid)}
+                          </span>
+                        )}
+                        <div className="dm-bubble">
+                          {message.encrypted ? (
+                            decrypted[message.id] ? (
+                              <p>{decrypted[message.id]}</p>
+                            ) : (
+                              <button
+                                className="dm-decrypt"
+                                onClick={async () => {
+                                  const xKey =
+                                    activeIdentity &&
+                                    state.unlockedXKeys[activeIdentity.id];
+                                  const peerKey =
+                                    peerDid && state.peerXKeys[peerDid];
+                                  if (!xKey || !peerKey)
+                                    return state.notify(
+                                      'Unlock your X25519 key and provide the peer public key.',
+                                      'error',
+                                    );
+                                  try {
+                                    const plaintext =
+                                      await decryptDirectMessage(
+                                        message.text,
+                                        xKey,
+                                        peerKey,
+                                      );
+                                    setDecrypted((items) => ({
+                                      ...items,
+                                      [message.id]: plaintext,
+                                    }));
+                                  } catch {
+                                    state.notify(
+                                      'E2E decryption failed.',
+                                      'error',
+                                    );
+                                  }
+                                }}
+                              >
+                                <LockKeyhole size={13} />
+                                Encrypted message · decrypt
+                              </button>
+                            )
+                          ) : (
+                            <p>{message.text}</p>
+                          )}
+                        </div>
+                        <div className="dm-message-meta">
+                          <time>{formatTime(message.createdAt)}</time>
+                          {message.verified && <span>✓ Signed</span>}
+                          <button
+                            onClick={() => openDetails(message.id)}
+                            aria-label="Open message details"
+                            title="Message details"
+                          >
+                            <MoreHorizontal size={14} />
+                          </button>
+                        </div>
+                      </div>
+                    </article>
+                  );
+                })}
                 {!threadMessages.length && (
                   <div className="room-feed-empty">
-                    NO MESSAGES YET · SEND THE FIRST SIGNED MESSAGE
+                    No messages yet. Start the conversation.
                   </div>
                 )}
               </div>
-              {selectedMessage && (
-                <aside className="direct-message-inspector">
-                  <header>
-                    <strong>RAW PROTOCOL MESSAGE</strong>
-                    <CopyButton
-                      value={JSON.stringify(selectedMessage, null, 2)}
-                      label="COPY JSON"
-                    />
-                  </header>
-                  <dl>
-                    <div>
-                      <dt>FROM</dt>
-                      <dd>{selectedMessage.from}</dd>
-                    </div>
-                    <div>
-                      <dt>TO</dt>
-                      <dd>{selectedMessage.recipientDid || 'UNSPECIFIED'}</dd>
-                    </div>
-                    <div>
-                      <dt>SEQ / NONCE</dt>
-                      <dd>
-                        {selectedMessage.seq} / {selectedMessage.nonce}
-                      </dd>
-                    </div>
-                    <div>
-                      <dt>SIGNATURE</dt>
-                      <dd>{selectedMessage.signature || 'UNSIGNED'}</dd>
-                    </div>
-                  </dl>
-                </aside>
-              )}
             </>
           ) : (
             <EmptyState
@@ -771,17 +774,6 @@ export function MessagesSurface() {
               maxLength={40}
             />
           </Field>
-          <div className="action-row full">
-            <CoreButton
-              variant="outline"
-              onClick={() => saveAlias(recipientDid, nickname)}
-              disabled={!recipientDid.trim()}
-            >
-              <Pencil size={12} />
-              SAVE NICKNAME ONLY
-            </CoreButton>
-            <span className="local-only-note">Stored only on this device.</span>
-          </div>
           <Field label="MAILBOX">
             <CoreInput
               value={mailbox}
@@ -829,11 +821,126 @@ export function MessagesSurface() {
                 : 'Message is signed but not content-encrypted.'}
             </p>
           </div>
-          <CoreButton onClick={send} disabled={busy || !text.trim()}>
-            <Send size={13} />
-            {e2e ? 'ENCRYPT & SIGN' : 'SIGN & SEND'}
-          </CoreButton>
+          <div className="compose-modal-actions full">
+            <span>Nickname stays on this device.</span>
+            <CoreButton
+              variant="outline"
+              onClick={() => saveAlias(recipientDid, nickname)}
+              disabled={!recipientDid.trim()}
+            >
+              SAVE CONTACT
+            </CoreButton>
+            <CoreButton onClick={send} disabled={busy || !text.trim()}>
+              <Send size={13} />
+              {e2e ? 'ENCRYPT & SEND' : 'SEND MESSAGE'}
+            </CoreButton>
+          </div>
         </div>
+      </Modal>
+      <Modal
+        open={contactOpen}
+        onOpenChange={setContactOpen}
+        title="EDIT CONTACT"
+        description="This nickname is private to this browser and never changes the DID."
+      >
+        <div className="contact-edit-card">
+          <span className="dm-avatar contact-avatar">
+            <Glyph did={contactDid} size={1} />
+          </span>
+          <div>
+            <strong>{displayName(contactDid)}</strong>
+            <small>{contactDid}</small>
+          </div>
+        </div>
+        <div className="form-grid">
+          <Field label="NICKNAME">
+            <CoreInput
+              value={aliasDrafts[contactDid] || ''}
+              onChange={(event) =>
+                setAliasDrafts((items) => ({
+                  ...items,
+                  [contactDid]: event.target.value,
+                }))
+              }
+              placeholder="Research partner"
+              maxLength={40}
+            />
+          </Field>
+          <div className="contact-modal-actions">
+            <CoreButton
+              variant="outline"
+              onClick={() => {
+                saveAlias(contactDid, '');
+                setContactOpen(false);
+              }}
+            >
+              REMOVE NAME
+            </CoreButton>
+            <CoreButton
+              onClick={() => {
+                saveAlias(contactDid, aliasDrafts[contactDid] || '');
+                setContactOpen(false);
+              }}
+            >
+              SAVE CONTACT
+            </CoreButton>
+          </div>
+        </div>
+      </Modal>
+      <Modal
+        open={detailsOpen}
+        onOpenChange={setDetailsOpen}
+        title="MESSAGE DETAILS"
+        description="Technical delivery and signature information for this message."
+        wide
+      >
+        {selectedMessage && (
+          <div className="message-details-modal">
+            <dl>
+              <div>
+                <dt>FROM</dt>
+                <dd>{selectedMessage.from}</dd>
+              </div>
+              <div>
+                <dt>TO</dt>
+                <dd>{selectedMessage.recipientDid || 'Unspecified'}</dd>
+              </div>
+              <div>
+                <dt>DELIVERED</dt>
+                <dd>{new Date(selectedMessage.createdAt).toLocaleString()}</dd>
+              </div>
+              <div>
+                <dt>STATUS</dt>
+                <dd>
+                  {selectedMessage.verified
+                    ? 'Signature verified'
+                    : 'Unverified'}
+                </dd>
+              </div>
+              <div>
+                <dt>SEQUENCE</dt>
+                <dd>{selectedMessage.seq}</dd>
+              </div>
+              <div>
+                <dt>NONCE</dt>
+                <dd>{selectedMessage.nonce}</dd>
+              </div>
+              <div className="wide-detail">
+                <dt>SIGNATURE</dt>
+                <dd>{selectedMessage.signature || 'Unsigned'}</dd>
+              </div>
+            </dl>
+            <div className="message-details-actions">
+              <CopyButton
+                value={JSON.stringify(selectedMessage, null, 2)}
+                label="COPY RAW JSON"
+              />
+              <CoreButton onClick={() => setDetailsOpen(false)}>
+                DONE
+              </CoreButton>
+            </div>
+          </div>
+        )}
       </Modal>
     </>
   );
