@@ -97,4 +97,15 @@ describe('CoreMesh identity removal', () => {
     expect(state.messages).toContainEqual(historicalMessage);
     expect(state.exploreMode).toBe(true);
   });
+
+  it('stores and removes local message nicknames without changing a DID', () => {
+    const did = 'did:key:z6MkPeerIdentity';
+    useCoreMesh.getState().setMessageAlias(did, 'Research Partner');
+
+    expect(useCoreMesh.getState().messageAliases[did]).toBe('Research Partner');
+    expect(useCoreMesh.getState().acceptedMessageDids).not.toContain(did);
+
+    useCoreMesh.getState().setMessageAlias(did, '   ');
+    expect(useCoreMesh.getState().messageAliases[did]).toBeUndefined();
+  });
 });

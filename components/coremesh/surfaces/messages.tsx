@@ -6,6 +6,7 @@ import {
   Check,
   KeyRound,
   LockKeyhole,
+  Pencil,
   Plus,
   RefreshCw,
   Send,
@@ -68,6 +69,10 @@ export function MessagesSurface() {
   const [peerXKey, setPeerXKey] = useState('');
   const [e2e, setE2e] = useState(false);
   const [text, setText] = useState('');
+  const [nickname, setNickname] = useState('');
+  const [aliasDrafts, setAliasDrafts] = useState<Record<string, string>>(
+    () => ({ ...state.messageAliases }),
+  );
   const [busy, setBusy] = useState(false);
   const [decrypted, setDecrypted] = useState<Record<string, string>>({});
   const [activeIdentityId, setActiveIdentityId] = useState(
@@ -167,6 +172,21 @@ export function MessagesSurface() {
   const selectedMessage = threadMessages.find(
     (message) => message.id === selectedMessageId,
   );
+  const displayName = (did: string) =>
+    aliasDrafts[did]?.trim() || state.messageAliases[did] || shortDid(did);
+  const saveAlias = (did: string, alias: string) => {
+    const normalizedDid = did.trim();
+    if (!normalizedDid.startsWith('did:key:')) {
+      state.notify('Enter a valid did:key before saving a nickname.', 'error');
+      return;
+    }
+    state.setMessageAlias(normalizedDid, alias);
+    setAliasDrafts((items) => ({ ...items, [normalizedDid]: alias }));
+    state.notify(
+      alias.trim() ? 'Local nickname saved.' : 'Local nickname removed.',
+      'success',
+    );
+  };
   const latestFor = (did: string) =>
     state.messages
       .filter(
@@ -393,9 +413,11 @@ export function MessagesSurface() {
       setBusy(false);
     }
     state.acceptMessageDid(normalizedRecipientDid);
+    if (nickname.trim()) saveAlias(normalizedRecipientDid, nickname);
     setSelectedDid(normalizedRecipientDid);
     setComposeOpen(false);
     setText('');
+    setNickname('');
     state.notify(
       e2e
         ? 'End-to-end encrypted signed message sent through Technocore.'
@@ -455,9 +477,9 @@ export function MessagesSurface() {
           <h2>MESSAGE REQUESTS</h2>
           {requests.map((did) => (
             <article key={did}>
-              <Glyph did={did} size={3} />
+              <Glyph did={did} size={2} />
               <div>
-                <strong>{shortDid(did)}</strong>
+                <strong>{displayName(did)}</strong>
                 <span>
                   <ShieldCheck size={11} />
                   SIGNED AUTHORSHIP OBSERVED
@@ -509,10 +531,11 @@ export function MessagesSurface() {
               }}
               key={did}
             >
-              <Glyph did={did} size={3} />
+              <Glyph did={did} size={2} />
               <span>
-                <strong>{shortDid(did)}</strong>
+                <strong>{displayName(did)}</strong>
                 <small>
+                  {state.messageAliases[did] ? `${shortDid(did)} · ` : ''}
                   {latestFor(did)
                     ? `${latestFor(did)?.from && ownDids.includes(latestFor(did)!.from) ? 'YOU' : 'PEER'} · ${formatTime(latestFor(did)!.createdAt)}`
                     : 'SIGNED THREAD'}
@@ -531,13 +554,13 @@ export function MessagesSurface() {
                     <Send size={14} />
                   </span>
                 ) : (
-                  <Glyph did={selectedDid} size={3} />
+                  <Glyph did={selectedDid} size={2} />
                 )}
                 <div>
                   <strong>
                     {selectedDid === SENT_THREAD
                       ? 'SENT MESSAGES'
-                      : shortDid(selectedDid)}
+                      : displayName(selectedDid)}
                   </strong>
                   <span>
                     {selectedDid === SENT_THREAD
@@ -555,20 +578,56 @@ export function MessagesSurface() {
                   </CoreButton>
                 )}
               </header>
+              {selectedDid !== SENT_THREAD && (
+                <div className="thread-alias-bar">
+                  <Pencil size={12} />
+                  <span>LOCAL NICKNAME</span>
+                  <CoreInput
+                    value={
+                      aliasDrafts[selectedDid] ??
+                      state.messageAliases[selectedDid] ??
+                      ''
+                    }
+                    onChange={(event) =>
+                      setAliasDrafts((items) => ({
+                        ...items,
+                        [selectedDid]: event.target.value,
+                      }))
+                    }
+                    placeholder="e.g. Research partner"
+                    maxLength={40}
+                  />
+                  <CoreButton
+                    variant="outline"
+                    onClick={() =>
+                      saveAlias(selectedDid, aliasDrafts[selectedDid] || '')
+                    }
+                  >
+                    SAVE
+                  </CoreButton>
+                  <small>Only visible on this device.</small>
+                </div>
+              )}
               <div className="message-feed compact" ref={feedRef}>
                 {threadMessages.map((message) => (
                   <article
                     className={`message-entry direct-message-row${selectedMessageId === message.id ? ' selected' : ''}`}
                     key={message.id}
                   >
-                    <Glyph did={message.from} size={2} />
+                    <Glyph did={message.from} size={1} />
                     <div>
                       <header>
                         <strong>
                           {ownDids.includes(message.from)
                             ? 'YOU'
-                            : shortDid(message.from)}
+                            : displayName(message.from)}
                         </strong>
+                        {ownDids.includes(message.from) &&
+                          message.recipientDid && (
+                            <span className="message-recipient">
+                              TO {displayName(message.recipientDid)}
+                            </span>
+                          )}
                         {message.verified && (
                           <span className="signed">SIGNED</span>
                         )}
@@ -695,10 +754,34 @@ export function MessagesSurface() {
           <Field label="RECIPIENT DID">
             <CoreInput
               value={recipientDid}
-              onChange={(event) => setRecipientDid(event.target.value)}
+              onChange={(event) => {
+                const did = event.target.value;
+                setRecipientDid(did);
+                const saved = state.messageAliases[did.trim()];
+                if (saved) setNickname(saved);
+              }}
               placeholder="did:key:z6Mk…"
             />
           </Field>
+          <Field label="LOCAL NICKNAME (OPTIONAL)">
+            <CoreInput
+              value={nickname}
+              onChange={(event) => setNickname(event.target.value)}
+              placeholder="e.g. Research partner"
+              maxLength={40}
+            />
+          </Field>
+          <div className="action-row full">
+            <CoreButton
+              variant="outline"
+              onClick={() => saveAlias(recipientDid, nickname)}
+              disabled={!recipientDid.trim()}
+            >
+              <Pencil size={12} />
+              SAVE NICKNAME ONLY
+            </CoreButton>
+            <span className="local-only-note">Stored only on this device.</span>
+          </div>
           <Field label="MAILBOX">
             <CoreInput
               value={mailbox}

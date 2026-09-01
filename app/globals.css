@@ -1532,7 +1532,7 @@ h1 {
 }
 .request-list article {
   display: grid;
-  grid-template-columns: 46px 1fr auto;
+  grid-template-columns: 30px 1fr auto;
   gap: 12px;
   align-items: center;
   padding: 12px;
@@ -1565,9 +1565,9 @@ h1 {
 }
 .thread-list button {
   width: 100%;
-  min-height: 70px;
+  min-height: 58px;
   display: grid;
-  grid-template-columns: 42px 1fr;
+  grid-template-columns: 30px 1fr;
   align-items: center;
   gap: 8px;
   padding: 8px;
@@ -1583,8 +1583,8 @@ h1 {
   background: var(--bg-2);
 }
 .sent-thread-icon {
-  width: 31px;
-  height: 31px;
+  width: 24px;
+  height: 24px;
   display: grid;
   place-items: center;
   border: 1px solid var(--line);
@@ -1615,9 +1615,9 @@ h1 {
   min-width: 0;
 }
 .thread-panel > header {
-  height: 70px;
+  min-height: 58px;
   display: grid;
-  grid-template-columns: 46px 1fr auto;
+  grid-template-columns: 30px 1fr auto;
   align-items: center;
   gap: 10px;
   padding: 8px 12px;
@@ -1644,13 +1644,39 @@ h1 {
   overflow: auto;
 }
 .message-feed.compact .message-entry {
-  grid-template-columns: 28px 1fr;
-  gap: 10px;
-  padding: 13px 0;
+  grid-template-columns: 21px 1fr;
+  gap: 8px;
+  padding: 11px 0;
   animation: message-arrive 180ms ease-out both;
 }
 .message-feed.compact .node-glyph {
-  padding: 3px;
+  padding: 2px;
+}
+.thread-alias-bar {
+  display: grid;
+  grid-template-columns: 16px auto minmax(140px, 260px) auto 1fr;
+  align-items: center;
+  gap: 8px;
+  padding: 8px 12px;
+  border-bottom: 1px solid var(--line);
+  background: var(--bg-1);
+  color: var(--text-muted);
+  font:
+    8px var(--font-space-mono),
+    monospace;
+}
+.thread-alias-bar .core-input {
+  min-height: 30px;
+}
+.thread-alias-bar small,
+.local-only-note {
+  color: var(--text-muted);
+  font:
+    8px var(--font-space-mono),
+    monospace;
+}
+.message-recipient {
+  color: var(--signal-cyan) !important;
 }
 .direct-message-row.selected {
   background: color-mix(in srgb, var(--signal-cyan) 7%, transparent);
@@ -2420,10 +2446,17 @@ h1 {
     min-width: 190px;
   }
   .request-list article {
-    grid-template-columns: 38px 1fr;
+    grid-template-columns: 28px 1fr;
   }
   .request-list .action-row {
     grid-column: 1/-1;
+  }
+  .thread-alias-bar {
+    grid-template-columns: 16px 1fr auto;
+  }
+  .thread-alias-bar > span,
+  .thread-alias-bar > small {
+    display: none;
   }
   .worker-detail {
     display: block;

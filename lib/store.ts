@@ -47,6 +47,7 @@ interface CoreMeshState {
   receipts: WorkReceipt[];
   blockedDids: string[];
   acceptedMessageDids: string[];
+  messageAliases: Record<string, string>;
   peerXKeys: Record<string, string>;
   trustedDids: string[];
   notices: Notice[];
@@ -89,6 +90,7 @@ interface CoreMeshState {
   addReceipt: (receipt: WorkReceipt) => void;
   toggleBlock: (did: string) => void;
   acceptMessageDid: (did: string) => void;
+  setMessageAlias: (did: string, alias: string) => void;
   setPeerXKey: (did: string, publicKey: string) => void;
   toggleTrust: (did: string) => void;
   setProtocol: (patch: Partial<ProtocolConfig>) => void;
@@ -246,6 +248,7 @@ const defaults = {
   receipts: [] as WorkReceipt[],
   blockedDids: [] as string[],
   acceptedMessageDids: [] as string[],
+  messageAliases: {} as Record<string, string>,
   peerXKeys: {} as Record<string, string>,
   trustedDids: [] as string[],
   notices: [] as Notice[],
@@ -679,6 +682,14 @@ export const useCoreMesh = create<CoreMeshState>()(
             ? state.acceptedMessageDids
             : [...state.acceptedMessageDids, did],
         })),
+      setMessageAlias: (did, rawAlias) =>
+        set((state) => {
+          const alias = rawAlias.trim().slice(0, 40);
+          const messageAliases = { ...state.messageAliases };
+          if (alias) messageAliases[did] = alias;
+          else delete messageAliases[did];
+          return { messageAliases };
+        }),
       setPeerXKey: (did, publicKey) =>
         set((state) => ({
           peerXKeys: { ...state.peerXKeys, [did]: publicKey },
@@ -711,6 +722,7 @@ export const useCoreMesh = create<CoreMeshState>()(
         const persisted = persistedState as Partial<CoreMeshState>;
         return {
           ...persisted,
+          messageAliases: persisted.messageAliases || {},
           protocol: {
             ...defaults.protocol,
             ...persisted.protocol,
