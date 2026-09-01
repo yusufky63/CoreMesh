@@ -1,6 +1,6 @@
 'use client';
 
-import { useMemo, useState } from 'react';
+import { useEffect, useMemo, useRef, useState } from 'react';
 import {
   Ban,
   Check,
@@ -22,6 +22,7 @@ import {
   CoreButton,
   CoreInput,
   CoreTextarea,
+  CopyButton,
   EmptyState,
   Field,
   formatTime,
@@ -45,6 +46,11 @@ export function MessagesSurface() {
   const [text, setText] = useState('');
   const [busy, setBusy] = useState(false);
   const [decrypted, setDecrypted] = useState<Record<string, string>>({});
+  const [activeIdentityId, setActiveIdentityId] = useState(
+    state.identities[0]?.id || '',
+  );
+  const [selectedMessageId, setSelectedMessageId] = useState('');
+  const feedRef = useRef<HTMLDivElement>(null);
   const ownDids = state.identities.map((identity) => identity.did);
   const directRooms = state.rooms.filter(
     (room) => room.kind === 'mailbox' || room.kind === 'private-mailbox',
@@ -68,18 +74,66 @@ export function MessagesSurface() {
       !state.acceptedMessageDids.includes(did) &&
       !state.blockedDids.includes(did),
   );
-  const visibleThreads = state.acceptedMessageDids.filter(
-    (did) => !state.blockedDids.includes(did),
+  const visibleThreads = useMemo(
+    () =>
+      [
+        ...new Set([
+          ...state.acceptedMessageDids,
+          ...state.messages
+            .filter(
+              (message) =>
+                directRooms.some((room) => room.id === message.roomId) &&
+                ownDids.includes(message.from) &&
+                message.recipientDid &&
+                !ownDids.includes(message.recipientDid),
+            )
+            .map((message) => message.recipientDid as string),
+        ]),
+      ].filter((did) => !state.blockedDids.includes(did)),
+    [
+      directRooms,
+      ownDids,
+      state.acceptedMessageDids,
+      state.blockedDids,
+      state.messages,
+    ],
   );
-  const activeIdentity = state.identities[0];
-  const threadMessages = selectedDid
-    ? state.messages.filter(
+  const activeIdentity =
+    state.identities.find((identity) => identity.id === activeIdentityId) ||
+    state.identities[0];
+  const threadMessages = useMemo(
+    () =>
+      selectedDid
+        ? state.messages
+            .filter(
+              (message) =>
+                directRooms.some((room) => room.id === message.roomId) &&
+                (message.from === selectedDid ||
+                  (ownDids.includes(message.from) &&
+                    message.recipientDid === selectedDid)),
+            )
+            .sort((a, b) => a.createdAt.localeCompare(b.createdAt))
+        : [],
+    [directRooms, ownDids, selectedDid, state.messages],
+  );
+  const selectedMessage = threadMessages.find(
+    (message) => message.id === selectedMessageId,
+  );
+  const latestFor = (did: string) =>
+    state.messages
+      .filter(
         (message) =>
           directRooms.some((room) => room.id === message.roomId) &&
-          (message.from === selectedDid ||
-            message.recipientDid === selectedDid),
+          (message.from === did || message.recipientDid === did),
       )
-    : [];
+      .sort((a, b) => b.createdAt.localeCompare(a.createdAt))[0];
+
+  useEffect(() => {
+    requestAnimationFrame(() => {
+      const feed = feedRef.current;
+      if (feed) feed.scrollTo({ top: feed.scrollHeight, behavior: 'auto' });
+    });
+  }, [selectedDid, threadMessages.length]);
 
   const resolveRecipient = async () => {
     if (!recipientDid.startsWith('did:key:')) {
@@ -234,10 +288,8 @@ export function MessagesSurface() {
     );
     setBusy(true);
     try {
-      const received = await new HttpTechnocoreAdapter(
-        state.protocol,
-      ).sendSignedMessage(targetMailbox, {
-        id: `pending_${nonce}`,
+      const outgoing = {
+        id: `tcsent_${targetMailbox}_${nonce}`,
         roomId: room.id,
         from: activeIdentity.did,
         recipientDid,
@@ -248,17 +300,28 @@ export function MessagesSurface() {
         signature: signed.signature,
         verified: true,
         encrypted: e2e,
-      });
+      };
+      const received = await new HttpTechnocoreAdapter(
+        state.protocol,
+      ).sendSignedMessage(targetMailbox, outgoing);
+      const normalized = received.map((message) => ({
+        ...message,
+        recipientDid:
+          message.from === activeIdentity.did
+            ? recipientDid
+            : activeIdentity.did,
+        encrypted:
+          e2e ||
+          message.text.startsWith('e2e1 ') ||
+          message.text.startsWith('{"v":1,"alg":'),
+      }));
+      const echoed = normalized.some(
+        (message) =>
+          message.from === activeIdentity.did && message.nonce === nonce,
+      );
       state.mergeProtocolMessages(
         room.id,
-        received.map((message) => ({
-          ...message,
-          recipientDid:
-            message.from === activeIdentity.did
-              ? recipientDid
-              : activeIdentity.did,
-          encrypted: e2e || message.text.startsWith('e2e1 '),
-        })),
+        echoed ? normalized : [...normalized, outgoing],
       );
     } catch (error) {
       state.notify(
@@ -332,7 +395,7 @@ export function MessagesSurface() {
           <h2>MESSAGE REQUESTS</h2>
           {requests.map((did) => (
             <article key={did}>
-              <Glyph did={did} size={5} />
+              <Glyph did={did} size={3} />
               <div>
                 <strong>{shortDid(did)}</strong>
                 <span>
@@ -362,13 +425,20 @@ export function MessagesSurface() {
           {visibleThreads.map((did) => (
             <button
               className={selectedDid === did ? 'active' : ''}
-              onClick={() => setSelectedDid(did)}
+              onClick={() => {
+                setSelectedDid(did);
+                setSelectedMessageId('');
+              }}
               key={did}
             >
-              <Glyph did={did} size={4} />
+              <Glyph did={did} size={3} />
               <span>
                 <strong>{shortDid(did)}</strong>
-                <small>QUIET · signed thread</small>
+                <small>
+                  {latestFor(did)
+                    ? `${latestFor(did)?.from && ownDids.includes(latestFor(did)!.from) ? 'YOU' : 'PEER'} · ${formatTime(latestFor(did)!.createdAt)}`
+                    : 'SIGNED THREAD'}
+                </small>
               </span>
             </button>
           ))}
@@ -378,7 +448,7 @@ export function MessagesSurface() {
           {selectedDid ? (
             <>
               <header>
-                <Glyph did={selectedDid} size={5} />
+                <Glyph did={selectedDid} size={3} />
                 <div>
                   <strong>{shortDid(selectedDid)}</strong>
                   <span>✓ SIGNED ≠ ★ TRUSTED</span>
@@ -391,10 +461,13 @@ export function MessagesSurface() {
                   BLOCK
                 </CoreButton>
               </header>
-              <div className="message-feed compact">
+              <div className="message-feed compact" ref={feedRef}>
                 {threadMessages.map((message) => (
-                  <article className="message-entry" key={message.id}>
-                    <Glyph did={message.from} size={4} />
+                  <article
+                    className={`message-entry direct-message-row${selectedMessageId === message.id ? ' selected' : ''}`}
+                    key={message.id}
+                  >
+                    <Glyph did={message.from} size={2} />
                     <div>
                       <header>
                         <strong>
@@ -405,6 +478,12 @@ export function MessagesSurface() {
                         {message.verified && (
                           <span className="signed">SIGNED</span>
                         )}
+                        <button
+                          className="raw-message-button"
+                          onClick={() => setSelectedMessageId(message.id)}
+                        >
+                          DETAILS
+                        </button>
                         <time>{formatTime(message.createdAt)}</time>
                       </header>
                       {message.encrypted ? (
@@ -452,7 +531,43 @@ export function MessagesSurface() {
                     </div>
                   </article>
                 ))}
+                {!threadMessages.length && (
+                  <div className="room-feed-empty">
+                    NO MESSAGES YET · SEND THE FIRST SIGNED MESSAGE
+                  </div>
+                )}
               </div>
+              {selectedMessage && (
+                <aside className="direct-message-inspector">
+                  <header>
+                    <strong>RAW PROTOCOL MESSAGE</strong>
+                    <CopyButton
+                      value={JSON.stringify(selectedMessage, null, 2)}
+                      label="COPY JSON"
+                    />
+                  </header>
+                  <dl>
+                    <div>
+                      <dt>FROM</dt>
+                      <dd>{selectedMessage.from}</dd>
+                    </div>
+                    <div>
+                      <dt>TO</dt>
+                      <dd>{selectedMessage.recipientDid || 'UNSPECIFIED'}</dd>
+                    </div>
+                    <div>
+                      <dt>SEQ / NONCE</dt>
+                      <dd>
+                        {selectedMessage.seq} / {selectedMessage.nonce}
+                      </dd>
+                    </div>
+                    <div>
+                      <dt>SIGNATURE</dt>
+                      <dd>{selectedMessage.signature || 'UNSIGNED'}</dd>
+                    </div>
+                  </dl>
+                </aside>
+              )}
             </>
           ) : (
             <EmptyState
@@ -470,6 +585,19 @@ export function MessagesSurface() {
         wide
       >
         <div className="form-grid two">
+          <Field label="FROM IDENTITY">
+            <select
+              className="core-select"
+              value={activeIdentity?.id || ''}
+              onChange={(event) => setActiveIdentityId(event.target.value)}
+            >
+              {state.identities.map((identity) => (
+                <option value={identity.id} key={identity.id}>
+                  {identity.name} · {shortDid(identity.did)}
+                </option>
+              ))}
+            </select>
+          </Field>
           <Field label="RECIPIENT DID">
             <CoreInput
               value={recipientDid}

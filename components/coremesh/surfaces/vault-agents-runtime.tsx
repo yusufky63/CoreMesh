@@ -883,15 +883,101 @@ export function AgentsSurface() {
   );
 }
 
+const providerTemplates: Record<
+  Provider['kind'],
+  {
+    label: string;
+    name: string;
+    endpoint: string;
+    secretRequired: boolean;
+    contract: string;
+  }
+> = {
+  'openai-compatible': {
+    label: 'OpenAI',
+    name: 'OpenAI',
+    endpoint: 'https://api.openai.com/v1',
+    secretRequired: true,
+    contract: 'OpenAI-compatible',
+  },
+  anthropic: {
+    label: 'Claude / Anthropic',
+    name: 'Claude',
+    endpoint: 'https://api.anthropic.com/v1',
+    secretRequired: true,
+    contract: 'Anthropic Messages API',
+  },
+  gemini: {
+    label: 'Google Gemini',
+    name: 'Gemini',
+    endpoint: 'https://generativelanguage.googleapis.com/v1beta/openai',
+    secretRequired: true,
+    contract: 'Gemini OpenAI compatibility',
+  },
+  deepseek: {
+    label: 'DeepSeek',
+    name: 'DeepSeek',
+    endpoint: 'https://api.deepseek.com',
+    secretRequired: true,
+    contract: 'OpenAI-compatible',
+  },
+  openrouter: {
+    label: 'OpenRouter',
+    name: 'OpenRouter',
+    endpoint: 'https://openrouter.ai/api/v1',
+    secretRequired: true,
+    contract: 'OpenAI-compatible',
+  },
+  groq: {
+    label: 'Groq',
+    name: 'Groq',
+    endpoint: 'https://api.groq.com/openai/v1',
+    secretRequired: true,
+    contract: 'OpenAI-compatible',
+  },
+  together: {
+    label: 'Together AI',
+    name: 'Together AI',
+    endpoint: 'https://api.together.xyz/v1',
+    secretRequired: true,
+    contract: 'OpenAI-compatible',
+  },
+  'lm-studio': {
+    label: 'LM Studio',
+    name: 'LM Studio',
+    endpoint: 'http://127.0.0.1:1234/v1',
+    secretRequired: false,
+    contract: 'Local OpenAI-compatible',
+  },
+  ollama: {
+    label: 'Ollama',
+    name: 'Ollama',
+    endpoint: 'http://127.0.0.1:11434',
+    secretRequired: false,
+    contract: 'Ollama native',
+  },
+  'custom-http': {
+    label: 'Custom HTTP',
+    name: 'Custom HTTP',
+    endpoint: 'http://127.0.0.1:8080/v1',
+    secretRequired: false,
+    contract: 'OpenAI-compatible',
+  },
+};
+
 export function ProvidersSurface() {
   const state = useCoreMesh();
   const [open, setOpen] = useState(false);
-  const [name, setName] = useState('OpenAI-compatible');
+  const [name, setName] = useState('OpenAI');
   const [kind, setKind] = useState<Provider['kind']>('openai-compatible');
   const [endpoint, setEndpoint] = useState('https://api.openai.com/v1');
-  const [secret, setSecret] = useState('');
+  const [secretRequired, setSecretRequired] = useState(true);
+  const [secrets, setSecrets] = useState<Record<string, string>>({});
   const [testing, setTesting] = useState('');
   const test = async (provider: Provider) => {
+    const secret = secrets[provider.id] || '';
+    if (provider.secretRequired && !secret)
+      return state.notify('Enter a session API key before testing.', 'error');
     setTesting(provider.id);
     const runtime = {
       id: 'test',
@@ -915,7 +1001,14 @@ export function ProvidersSurface() {
     });
     state.notify(result.detail, result.ok ? 'success' : 'error');
     setTesting('');
-    setSecret('');
+    setSecrets((items) => ({ ...items, [provider.id]: '' }));
+  };
+  const applyTemplate = (next: Provider['kind']) => {
+    const template = providerTemplates[next];
+    setKind(next);
+    setName(template.name);
+    setEndpoint(template.endpoint);
+    setSecretRequired(template.secretRequired);
   };
   return (
     <>
@@ -939,6 +1032,10 @@ export function ProvidersSurface() {
             <div>
               <h2>{provider.name}</h2>
               <p>{provider.endpoint}</p>
+              <small>
+                {providerTemplates[provider.kind].contract} ·{' '}
+                {provider.secretRequired ? 'SESSION KEY' : 'NO KEY'}
+              </small>
               <span
                 className={provider.connected ? 'state-live' : 'state-quiet'}
               >
@@ -949,9 +1046,13 @@ export function ProvidersSurface() {
               {provider.secretRequired && (
                 <CoreInput
                   type="password"
-                  value={testing === provider.id ? secret : ''}
-                  onChange={(event) => setSecret(event.target.value)}
-                  onFocus={() => setTesting(provider.id)}
+                  value={secrets[provider.id] || ''}
+                  onChange={(event) =>
+                    setSecrets((items) => ({
+                      ...items,
+                      [provider.id]: event.target.value,
+                    }))
+                  }
                   placeholder="Session API key"
                 />
               )}
@@ -978,22 +1079,16 @@ export function ProvidersSurface() {
               className="core-select"
               value={kind}
               onChange={(event) =>
-                setKind(event.target.value as Provider['kind'])
+                applyTemplate(event.target.value as Provider['kind'])
               }
             >
-              {[
-                'openai-compatible',
-                'openrouter',
-                'groq',
-                'together',
-                'lm-studio',
-                'ollama',
-                'custom-http',
-              ].map((item) => (
-                <option value={item} key={item}>
-                  {item}
-                </option>
-              ))}
+              {(Object.keys(providerTemplates) as Provider['kind'][]).map(
+                (item) => (
+                  <option value={item} key={item}>
+                    {providerTemplates[item].label}
+                  </option>
+                ),
+              )}
             </select>
           </Field>
           <Field label="NAME">
@@ -1011,22 +1106,29 @@ export function ProvidersSurface() {
           <label className="check-row">
             <input
               type="checkbox"
-              checked={!['lm-studio', 'ollama'].includes(kind)}
-              readOnly
+              checked={secretRequired}
+              onChange={(event) => setSecretRequired(event.target.checked)}
             />
             <span>API key required for test (never persisted)</span>
           </label>
           <CoreButton
             onClick={() => {
+              try {
+                new URL(endpoint);
+              } catch {
+                state.notify('Enter a valid provider endpoint URL.', 'error');
+                return;
+              }
               state.addProvider({
                 id: randomId('provider'),
                 name,
                 kind,
                 endpoint,
                 connected: false,
-                secretRequired: !['lm-studio', 'ollama'].includes(kind),
+                secretRequired,
               });
               setOpen(false);
+              state.notify(`${name} provider configuration saved.`, 'success');
             }}
           >
             ADD PROVIDER
@@ -1045,6 +1147,10 @@ export function RuntimesSurface() {
   const [providerId, setProviderId] = useState(state.providers[0]?.id || '');
   const [model, setModel] = useState('');
   const [endpoint, setEndpoint] = useState('');
+  const [temperature, setTemperature] = useState(0.3);
+  const [maxOutput, setMaxOutput] = useState(1800);
+  const [timeout, setTimeout] = useState(45);
+  const [fallbackRuntimeId, setFallbackRuntimeId] = useState('');
   return (
     <>
       <SectionHeader
@@ -1098,6 +1204,20 @@ export function RuntimesSurface() {
               <div>
                 <dt>TIMEOUT</dt>
                 <dd>{runtime.timeout || 45}s</dd>
+              </div>
+              <div>
+                <dt>TEMP / MAX</dt>
+                <dd>
+                  {runtime.temperature ?? 0.3} / {runtime.maxOutput ?? 1800}
+                </dd>
+              </div>
+              <div>
+                <dt>FALLBACK</dt>
+                <dd>
+                  {state.runtimes.find(
+                    (item) => item.id === runtime.fallbackRuntimeId,
+                  )?.name || 'NONE'}
+                </dd>
               </div>
             </dl>
           </article>
@@ -1168,6 +1288,48 @@ export function RuntimesSurface() {
                   placeholder="Optional"
                 />
               </Field>
+              <Field label="TEMPERATURE">
+                <CoreInput
+                  type="number"
+                  min="0"
+                  max="2"
+                  step="0.1"
+                  value={temperature}
+                  onChange={(event) =>
+                    setTemperature(Number(event.target.value))
+                  }
+                />
+              </Field>
+              <Field label="MAX OUTPUT TOKENS">
+                <CoreInput
+                  type="number"
+                  min="1"
+                  value={maxOutput}
+                  onChange={(event) => setMaxOutput(Number(event.target.value))}
+                />
+              </Field>
+              <Field label="TIMEOUT (SECONDS)">
+                <CoreInput
+                  type="number"
+                  min="1"
+                  value={timeout}
+                  onChange={(event) => setTimeout(Number(event.target.value))}
+                />
+              </Field>
+              <Field label="FALLBACK RUNTIME">
+                <select
+                  className="core-select"
+                  value={fallbackRuntimeId}
+                  onChange={(event) => setFallbackRuntimeId(event.target.value)}
+                >
+                  <option value="">None</option>
+                  {state.runtimes.map((runtime) => (
+                    <option value={runtime.id} key={runtime.id}>
+                      {runtime.name}
+                    </option>
+                  ))}
+                </select>
+              </Field>
             </>
           )}
           <CoreButton
@@ -1179,9 +1341,10 @@ export function RuntimesSurface() {
                 providerId: providerId || undefined,
                 endpoint: endpoint || undefined,
                 model: model || undefined,
-                temperature: 0.3,
-                maxOutput: 1800,
-                timeout: 45,
+                temperature,
+                maxOutput,
+                timeout,
+                fallbackRuntimeId: fallbackRuntimeId || undefined,
                 status: type === 'identity-only' ? 'connected' : 'untested',
               });
               setOpen(false);

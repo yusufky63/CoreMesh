@@ -4,6 +4,7 @@ import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import {
   ArrowDown,
   Bookmark,
+  Download,
   Eye,
   Filter,
   LockKeyhole,
@@ -57,6 +58,17 @@ function nextTechnocoreNonce(
     );
   const clock = BigInt(Date.now());
   return (clock > last ? clock : last + BigInt(1)).toString();
+}
+
+function downloadRoomExport(name: string, content: string) {
+  const url = URL.createObjectURL(
+    new Blob([content], { type: 'application/x-ndjson;charset=utf-8' }),
+  );
+  const link = document.createElement('a');
+  link.href = url;
+  link.download = `${name.replace(/[^a-z0-9_-]/giu, '_')}.jsonl`;
+  link.click();
+  URL.revokeObjectURL(url);
 }
 
 export function PulseSurface() {
@@ -224,7 +236,9 @@ export function PulseSurface() {
 export function RoomsSurface() {
   const state = useCoreMesh();
   const [query, setQuery] = useState('');
-  const [filter, setFilter] = useState<'all' | RoomKind | 'bookmarked'>('all');
+  const [filter, setFilter] = useState<
+    'all' | RoomKind | 'bookmarked' | 'active' | 'new' | 'signed-heavy'
+  >('all');
   const [createOpen, setCreateOpen] = useState(false);
   const [roomName, setRoomName] = useState('');
   const [roomTopic, setRoomTopic] = useState('');
@@ -237,6 +251,7 @@ export function RoomsSurface() {
     'idle' | 'loading' | 'live' | 'retrying'
   >('idle');
   const [newMessageCount, setNewMessageCount] = useState(0);
+  const [newRoomCutoff] = useState(() => new Date().getTime() - 7 * 86_400_000);
   const feedRef = useRef<HTMLDivElement>(null);
   const isNearBottomRef = useRef(true);
   const selectedRoom = state.rooms.find((room) => room.id === selectedRoomId);
@@ -244,6 +259,10 @@ export function RoomsSurface() {
     (room) =>
       (filter === 'all' ||
         (filter === 'bookmarked' && room.bookmarked) ||
+        (filter === 'active' && room.messageCount > 0) ||
+        (filter === 'new' &&
+          new Date(room.createdAt).getTime() >= newRoomCutoff) ||
+        (filter === 'signed-heavy' && room.signedPercent >= 80) ||
         room.kind === filter) &&
       `${room.name} ${room.topic}`.toLowerCase().includes(query.toLowerCase()),
   );
@@ -543,6 +562,27 @@ export function RoomsSurface() {
       setSyncing(false);
     }
   };
+  const exportSelectedRoom = async () => {
+    if (!selectedRoom) return;
+    try {
+      const content =
+        selectedRoom.source === 'technocore'
+          ? await new HttpTechnocoreAdapter(state.protocol).exportRoom(
+              selectedRoom.name,
+            )
+          : state.messages
+              .filter((message) => message.roomId === selectedRoom.id)
+              .map((message) => JSON.stringify(message))
+              .join('\n');
+      downloadRoomExport(selectedRoom.name, content);
+      state.notify('Room JSONL export prepared.', 'success');
+    } catch (error) {
+      state.notify(
+        error instanceof Error ? error.message : 'Room export failed.',
+        'error',
+      );
+    }
+  };
 
   if (selectedRoom)
     return (
@@ -569,6 +609,10 @@ export function RoomsSurface() {
                   {roomLoading ? 'READING…' : 'SYNC ROOM'}
                 </CoreButton>
               )}
+              <CoreButton variant="outline" onClick={exportSelectedRoom}>
+                <Download size={12} />
+                EXPORT JSONL
+              </CoreButton>
               <span className="source-chip">
                 <i />
                 {selectedRoom.source === 'local' ? 'LOCAL' : 'TECHNOCORE'}
@@ -735,17 +779,26 @@ export function RoomsSurface() {
         </div>
         <div className="filter-row">
           <Filter size={12} />
-          {(['all', 'public', 'owned', 'ephemeral', 'bookmarked'] as const).map(
-            (item) => (
-              <button
-                className={filter === item ? 'active' : ''}
-                onClick={() => setFilter(item)}
-                key={item}
-              >
-                {item}
-              </button>
-            ),
-          )}
+          {(
+            [
+              'all',
+              'active',
+              'new',
+              'public',
+              'owned',
+              'ephemeral',
+              'signed-heavy',
+              'bookmarked',
+            ] as const
+          ).map((item) => (
+            <button
+              className={filter === item ? 'active' : ''}
+              onClick={() => setFilter(item)}
+              key={item}
+            >
+              {item}
+            </button>
+          ))}
         </div>
       </div>
       <div className="room-matrix">

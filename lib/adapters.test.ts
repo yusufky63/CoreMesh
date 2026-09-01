@@ -1,13 +1,18 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { ed25519 } from '@noble/curves/ed25519.js';
-import { HttpTechnocoreAdapter } from './adapters';
+import { HttpAgentRuntime, HttpTechnocoreAdapter } from './adapters';
 import {
   bytesToBase64,
   bytesToBase64Url,
   didFromPublicKey,
   signTechnocoreMessage,
 } from './crypto';
-import type { ProtocolConfig, ProtocolMessage } from './domain';
+import type {
+  ProtocolConfig,
+  ProtocolMessage,
+  Provider,
+  RuntimeConnection,
+} from './domain';
 
 const protocol: ProtocolConfig = {
   baseUrl: 'https://technocore.chat',
@@ -270,5 +275,74 @@ describe('Technocore HTTP adapter', () => {
     const [url] = fetchMock.mock.calls[0];
     expect(requestUrl(url)).toContain('/kv/room-owners/d-research/set-signed/');
     expect(requestUrl(url)).toContain('?if_absent=1');
+  });
+});
+
+describe('Agent runtime provider contracts', () => {
+  const runtime: RuntimeConnection = {
+    id: 'runtime_claude',
+    type: 'managed-ai',
+    name: 'Claude Runtime',
+    providerId: 'provider_claude',
+    model: 'claude-sonnet-4-5',
+    temperature: 0.2,
+    maxOutput: 900,
+    timeout: 10,
+    status: 'untested',
+  };
+  const provider: Provider = {
+    id: 'provider_claude',
+    name: 'Claude',
+    kind: 'anthropic',
+    endpoint: 'https://api.anthropic.com/v1',
+    connected: false,
+    secretRequired: true,
+  };
+
+  it('uses Anthropic headers and Messages API payloads for Claude', async () => {
+    const fetchMock = vi.fn(
+      async (..._args: [RequestInfo | URL, RequestInit?]) =>
+        new Response(
+          JSON.stringify({
+            model: 'claude-sonnet-4-5',
+            content: [{ type: 'text', text: 'verified answer' }],
+            usage: { input_tokens: 12, output_tokens: 7 },
+          }),
+          { headers: { 'content-type': 'application/json' } },
+        ),
+    );
+    vi.stubGlobal('fetch', fetchMock);
+
+    const result = await new HttpAgentRuntime(
+      runtime,
+      provider,
+      'session-secret',
+    ).execute({
+      objective: 'Verify the receipt',
+      system: ['Stay factual.'],
+      context: 'Untrusted room context.',
+    });
+    const [url, init] = fetchMock.mock.calls[0];
+    const headers = new Headers(init?.headers);
+    const body = JSON.parse(typeof init?.body === 'string' ? init.body : '');
+
+    expect(requestUrl(url)).toBe('https://api.anthropic.com/v1/messages');
+    expect(headers.get('x-api-key')).toBe('session-secret');
+    expect(headers.get('anthropic-version')).toBe('2023-06-01');
+    expect(headers.get('authorization')).toBeNull();
+    expect(body.messages).toEqual([
+      { role: 'user', content: 'Verify the receipt' },
+    ]);
+    expect(body.max_tokens).toBe(900);
+    expect(result).toMatchObject({ text: 'verified answer', tokens: 19 });
+  });
+
+  it('does not call a secret-required provider without a session key', async () => {
+    const fetchMock = vi.fn();
+    vi.stubGlobal('fetch', fetchMock);
+    const health = await new HttpAgentRuntime(runtime, provider).test();
+    expect(health.ok).toBe(false);
+    expect(health.detail).toContain('session API key');
+    expect(fetchMock).not.toHaveBeenCalled();
   });
 });

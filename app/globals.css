@@ -1499,6 +1499,14 @@ h1 {
     9px var(--font-space-mono),
     monospace;
 }
+.provider-list small {
+  display: block;
+  color: var(--text-muted);
+  font:
+    8px var(--font-space-mono),
+    monospace;
+  letter-spacing: 0.04em;
+}
 .provider-actions {
   display: flex;
   gap: 8px;
@@ -1626,6 +1634,70 @@ h1 {
   padding: 0 14px;
   max-height: 540px;
   overflow: auto;
+}
+.message-feed.compact .message-entry {
+  grid-template-columns: 28px 1fr;
+  gap: 10px;
+  padding: 13px 0;
+  animation: message-arrive 180ms ease-out both;
+}
+.message-feed.compact .node-glyph {
+  padding: 3px;
+}
+.direct-message-row.selected {
+  background: color-mix(in srgb, var(--signal-cyan) 7%, transparent);
+  box-shadow: inset 2px 0 var(--signal-cyan);
+}
+.raw-message-button {
+  border: 0;
+  background: transparent;
+  color: var(--signal-cyan);
+  padding: 0;
+  font:
+    8px var(--font-space-mono),
+    monospace;
+  cursor: pointer;
+}
+.raw-message-button:hover,
+.raw-message-button:focus-visible {
+  text-decoration: underline;
+}
+.direct-message-inspector {
+  border-top: 1px solid var(--line);
+  background: var(--bg-1);
+  padding: 12px 14px;
+}
+.direct-message-inspector > header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  margin-bottom: 10px;
+  font:
+    9px var(--font-space-mono),
+    monospace;
+}
+.direct-message-inspector dl {
+  display: grid;
+  gap: 6px;
+  margin: 0;
+}
+.direct-message-inspector dl > div {
+  display: grid;
+  grid-template-columns: 92px minmax(0, 1fr);
+  gap: 10px;
+}
+.direct-message-inspector dt,
+.direct-message-inspector dd {
+  margin: 0;
+  color: var(--text-muted);
+  font:
+    8px var(--font-space-mono),
+    monospace;
+  overflow-wrap: anywhere;
+}
+.direct-message-inspector dd {
+  color: var(--text-secondary);
 }
 .encrypted-message {
   display: flex;
@@ -1889,6 +1961,58 @@ h1 {
   border-top: 1px solid var(--line);
   padding-top: 12px;
 }
+.proof-explainer {
+  display: grid;
+  grid-template-columns: 1.1fr 1.4fr;
+  gap: 18px 28px;
+  margin-bottom: 24px;
+  padding: 18px;
+  border: 1px solid var(--line);
+  background: var(--bg-1);
+}
+.proof-explainer strong {
+  font:
+    11px var(--font-space-mono),
+    monospace;
+}
+.proof-explainer p,
+.proof-explainer small {
+  color: var(--text-secondary);
+  font-size: 11px;
+  line-height: 1.55;
+}
+.proof-explainer ol {
+  display: grid;
+  gap: 8px;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+.proof-explainer li {
+  display: grid;
+  grid-template-columns: 22px 1fr;
+  gap: 8px;
+  align-items: center;
+  color: var(--text-secondary);
+  font-size: 10px;
+}
+.proof-explainer li b {
+  display: grid;
+  place-items: center;
+  width: 22px;
+  height: 22px;
+  border: 1px solid var(--signal-cyan);
+  color: var(--signal-cyan);
+  font:
+    9px var(--font-space-mono),
+    monospace;
+}
+.proof-explainer > small {
+  grid-column: 1 / -1;
+  padding-top: 10px;
+  border-top: 1px solid var(--line-subtle);
+  color: var(--warning-amber);
+}
 .proof-layout {
   display: grid;
   grid-template-columns: 1fr 1fr;
@@ -1923,6 +2047,9 @@ h1 {
 }
 .verification-list .invalid {
   color: var(--error-red);
+}
+.verification-list .unchecked {
+  color: var(--text-muted);
 }
 .receipt-ledger {
   margin-top: 24px;
@@ -2240,6 +2367,12 @@ h1 {
   .runtime-grid,
   .proof-layout {
     grid-template-columns: 1fr;
+  }
+  .proof-explainer {
+    grid-template-columns: 1fr;
+  }
+  .proof-explainer > small {
+    grid-column: auto;
   }
   .toolbar {
     align-items: stretch;

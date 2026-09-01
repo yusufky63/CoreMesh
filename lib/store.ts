@@ -421,8 +421,14 @@ export const useCoreMesh = create<CoreMeshState>()(
       mergeProtocolMessages: (roomId, incoming) =>
         set((state) => {
           const ids = new Set(incoming.map((message) => message.id));
+          const protocolKey = (message: ProtocolMessage) =>
+            `${message.roomId}|${message.from}|${message.nonce}|${message.signature || ''}`;
+          const protocolKeys = new Set(incoming.map(protocolKey));
           const messages = [
-            ...state.messages.filter((message) => !ids.has(message.id)),
+            ...state.messages.filter(
+              (message) =>
+                !ids.has(message.id) && !protocolKeys.has(protocolKey(message)),
+            ),
             ...incoming,
           ];
           const observed = messages.filter(

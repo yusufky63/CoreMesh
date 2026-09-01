@@ -453,6 +453,14 @@ export class HttpAgentRuntime implements AgentRuntime {
     );
   }
   private headers() {
+    if (this.provider?.secretRequired && !this.sessionSecret)
+      throw new Error('This provider requires a session API key.');
+    if (this.provider?.kind === 'anthropic')
+      return {
+        'content-type': 'application/json',
+        'anthropic-version': '2023-06-01',
+        ...(this.sessionSecret ? { 'x-api-key': this.sessionSecret } : {}),
+      };
     return {
       'content-type': 'application/json',
       ...(this.sessionSecret
@@ -532,6 +540,41 @@ export class HttpAgentRuntime implements AgentRuntime {
         text: body.message?.content || '',
         model: body.model || model,
         tokens: body.eval_count,
+        latencyMs: Math.round(performance.now() - started),
+      };
+    }
+    if (this.provider?.kind === 'anthropic') {
+      const body = (await (
+        await checkedFetch(
+          `${endpoint}/messages`,
+          {
+            method: 'POST',
+            headers: this.headers(),
+            body: JSON.stringify({
+              model,
+              max_tokens: input.maxOutput ?? this.runtime.maxOutput ?? 1800,
+              temperature: input.temperature ?? this.runtime.temperature ?? 0.3,
+              system,
+              messages: [{ role: 'user', content: input.objective }],
+            }),
+          },
+          (this.runtime.timeout || 45) * 1000,
+        )
+      ).json()) as {
+        content?: { type?: string; text?: string }[];
+        usage?: { input_tokens?: number; output_tokens?: number };
+        model?: string;
+      };
+      return {
+        text:
+          body.content
+            ?.filter((item) => item.type === 'text')
+            .map((item) => item.text || '')
+            .join('\n') || '',
+        model: body.model || model,
+        tokens:
+          (body.usage?.input_tokens || 0) + (body.usage?.output_tokens || 0) ||
+          undefined,
         latencyMs: Math.round(performance.now() - started),
       };
     }

@@ -12,15 +12,25 @@ import {
   XCircle,
 } from 'lucide-react';
 import {
+  bytesToBase64,
+  publicKeyFromDid,
   randomId,
   redactSecrets,
   sha256Text,
   signData,
+  signMessage,
+  signTechnocoreMessage,
   untrustedRoomContext,
   verifyData,
 } from '@/lib/crypto';
-import { HttpAgentRuntime } from '@/lib/adapters';
-import type { ApprovalMode, Task, TaskStatus, Worker } from '@/lib/domain';
+import { HttpAgentRuntime, HttpTechnocoreAdapter } from '@/lib/adapters';
+import type {
+  ApprovalMode,
+  Task,
+  TaskStatus,
+  Worker,
+  WorkReceipt,
+} from '@/lib/domain';
 import { taskTransitions } from '@/lib/domain';
 import { useCoreMesh } from '@/lib/store';
 import {
@@ -45,7 +55,19 @@ const workerTypes: Worker['type'][] = [
   'proof-verifier',
   'archivist',
   'model-router',
+  'presence-worker',
 ];
+
+type ProofStatus = 'valid' | 'invalid' | 'unchecked';
+
+function validReceiptSignature(receipt: WorkReceipt) {
+  const { signature, ...data } = receipt;
+  return verifyData(
+    data,
+    signature,
+    bytesToBase64(publicKeyFromDid(receipt.agentDid)),
+  );
+}
 
 export function WorkersSurface() {
   const state = useCoreMesh();
@@ -565,12 +587,37 @@ export function TasksSurface() {
   const [artifactName, setArtifactName] = useState('result.md');
   const [artifactContent, setArtifactContent] = useState('');
   const task = state.tasks.find((item) => item.id === selected);
-  const advance = (status: TaskStatus) => {
+  const advance = async (status: TaskStatus) => {
     try {
       const agent = state.agents.find((item) => item.id === assignee);
       const identity =
         agent && state.identities.find((item) => item.id === agent.identityId);
       state.transitionTask(task!.id, status, identity?.did);
+      if (status === 'assigned') {
+        const current = useCoreMesh.getState();
+        const updatedTask = current.tasks.find((item) => item.id === task!.id);
+        const room = current.rooms.find(
+          (item) => item.id === updatedTask?.room,
+        );
+        const owner = current.identities.find(
+          (item) => item.did === updatedTask?.ownerDid,
+        );
+        const ownerKey = owner && current.unlockedKeys[owner.id];
+        if (room && owner && ownerKey && current.protocol.connected) {
+          try {
+            const adapter = new HttpTechnocoreAdapter(current.protocol);
+            await adapter.claimOwnedRoom(room.name, owner.did, ownerKey);
+            if (room.topic)
+              await adapter.setNote('topic', room.name, room.topic);
+            current.addRoom({ ...room, source: 'technocore' });
+          } catch (error) {
+            current.notify(
+              `${error instanceof Error ? error.message : 'Managed workspace claim failed.'} The task remains a local draft workspace.`,
+              'info',
+            );
+          }
+        }
+      }
       state.notify(`Task moved to ${status}.`, 'success');
     } catch (error) {
       state.notify(
@@ -596,15 +643,86 @@ export function TasksSurface() {
       uri: `coremesh://artifact/${task.id}/${encodeURIComponent(artifactName)}`,
       sha256: await sha256Text(artifactContent),
     };
+    const room = state.rooms.find((item) => item.id === task.room);
+    if (!room)
+      return state.notify('This task has no managed workspace.', 'error');
+    const priorNonce = state.messages
+      .filter(
+        (message) =>
+          message.roomId === room.id &&
+          message.from === identity.did &&
+          /^\d{1,19}$/u.test(message.nonce),
+      )
+      .reduce(
+        (highest, message) =>
+          BigInt(message.nonce) > highest ? BigInt(message.nonce) : highest,
+        BigInt(0),
+      );
+    const clock = BigInt(new Date().getTime());
+    const nonce = (
+      clock > priorNonce ? clock : priorNonce + BigInt(1)
+    ).toString();
+    const anchorText = `COREMESH_RESULT ${task.id} ${artifact.uri} sha256:${artifact.sha256}`;
+    let anchor;
+    if (room.source === 'technocore') {
+      if (!state.protocol.connected)
+        return state.notify('Technocore is disconnected.', 'error');
+      const signed = signTechnocoreMessage(room.name, nonce, anchorText, key);
+      anchor = {
+        id: `tcresult_${task.id}_${nonce}`,
+        roomId: room.id,
+        from: identity.did,
+        text: signed.text,
+        createdAt: new Date().toISOString(),
+        seq: nonce,
+        nonce,
+        signature: signed.signature,
+        verified: true,
+      };
+      try {
+        const received = await new HttpTechnocoreAdapter(
+          state.protocol,
+        ).sendSignedMessage(room.name, anchor);
+        const echoed = received.some(
+          (message) => message.from === identity.did && message.nonce === nonce,
+        );
+        state.mergeProtocolMessages(
+          room.id,
+          echoed ? received : [...received, anchor],
+        );
+      } catch (error) {
+        return state.notify(
+          error instanceof Error ? error.message : 'Result anchor failed.',
+          'error',
+        );
+      }
+    } else {
+      const base = {
+        roomId: room.id,
+        from: identity.did,
+        text: anchorText,
+        createdAt: new Date().toISOString(),
+        seq: nonce,
+        nonce,
+        inReplyTo: undefined,
+      };
+      anchor = {
+        id: randomId('result'),
+        ...base,
+        signature: signMessage(base, key),
+        verified: true,
+      };
+      state.addMessage(anchor);
+    }
     state.updateTask(task.id, { artifacts: [...task.artifacts, artifact] });
-    if (task.status === 'running') advance('submitted');
+    if (task.status === 'running') state.transitionTask(task.id, 'submitted');
     const receiptData = {
       version: 'coremesh-work-v1' as const,
       taskId: task.id,
       agentDid: identity.did,
-      room: state.rooms.find((room) => room.id === task.room)?.name || '',
-      seq: String(new Date().getTime()),
-      nonce: crypto.randomUUID(),
+      room: room.name,
+      seq: anchor.seq,
+      nonce: anchor.nonce,
       artifact,
       createdAt: new Date().toISOString(),
     };
@@ -711,7 +829,7 @@ export function TasksSurface() {
                       ? 'outline'
                       : 'default'
                   }
-                  onClick={() => advance(status)}
+                  onClick={() => void advance(status)}
                   disabled={status === 'assigned' && !assignee}
                   key={status}
                 >
@@ -922,32 +1040,49 @@ export function ProofsSurface() {
   const [raw, setRaw] = useState('');
   const [artifactContent, setArtifactContent] = useState('');
   const [result, setResult] = useState<{
-    did: boolean;
-    signature: boolean;
-    room: boolean;
-    artifact: boolean;
+    did: ProofStatus;
+    signature: ProofStatus;
+    room: ProofStatus;
+    task: ProofStatus;
+    artifact: ProofStatus;
   }>();
   const verify = async () => {
     try {
-      const receipt = JSON.parse(raw);
+      const receipt = JSON.parse(raw) as WorkReceipt;
       if (receipt.version !== 'coremesh-work-v1')
         throw new Error('Not a CoreMesh Work Receipt.');
-      const identity = state.identities.find(
-        (item) => item.did === receipt.agentDid,
+      const signatureValid = validReceiptSignature(receipt);
+      const room = state.rooms.find((item) => item.name === receipt.room);
+      const roomFound = Boolean(
+        room &&
+        state.messages.some(
+          (message) =>
+            message.roomId === room.id &&
+            message.from === receipt.agentDid &&
+            message.seq === receipt.seq &&
+            message.nonce === receipt.nonce,
+        ),
       );
-      const { signature, ...data } = receipt;
-      const signatureValid = Boolean(
-        identity && verifyData(data, signature, identity.publicKey),
+      const task = state.tasks.find((item) => item.id === receipt.taskId);
+      const taskFound = Boolean(
+        task?.artifacts.some(
+          (artifact) => artifact.sha256 === receipt.artifact?.sha256,
+        ),
       );
-      const roomFound = state.rooms.some((room) => room.name === receipt.room);
       const artifactValid = artifactContent
         ? (await sha256Text(artifactContent)) === receipt.artifact?.sha256
-        : false;
+        : undefined;
       setResult({
-        did: Boolean(identity),
-        signature: signatureValid,
-        room: roomFound,
-        artifact: artifactValid,
+        did: receipt.agentDid.startsWith('did:key:') ? 'valid' : 'invalid',
+        signature: signatureValid ? 'valid' : 'invalid',
+        room: roomFound ? 'valid' : 'invalid',
+        task: taskFound ? 'valid' : 'invalid',
+        artifact:
+          artifactValid === undefined
+            ? 'unchecked'
+            : artifactValid
+              ? 'valid'
+              : 'invalid',
       });
     } catch (error) {
       state.notify(
@@ -966,9 +1101,10 @@ export function ProofsSurface() {
           state.receipts[0] && (
             <CoreButton
               variant="outline"
-              onClick={() =>
-                setRaw(JSON.stringify(state.receipts.at(-1), null, 2))
-              }
+              onClick={() => (
+                setRaw(JSON.stringify(state.receipts.at(-1), null, 2)),
+                setResult(undefined)
+              )}
             >
               LOAD LATEST
             </CoreButton>
@@ -981,11 +1117,8 @@ export function ProofsSurface() {
           [
             'VALIDATED',
             String(
-              state.receipts.filter((receipt) =>
-                state.identities.some(
-                  (identity) => identity.did === receipt.agentDid,
-                ),
-              ).length,
+              state.receipts.filter((receipt) => validReceiptSignature(receipt))
+                .length,
             ),
             'ok',
           ],
@@ -993,20 +1126,58 @@ export function ProofsSurface() {
           ['FLOP', 'NOT CLAIMED', 'warn'],
         ]}
       />
+      <section className="proof-explainer">
+        <div>
+          <strong>WHAT THIS PROVES</strong>
+          <p>
+            A CoreMesh Work Receipt cryptographically links an agent DID, its
+            signature, a task artifact hash and the exact room sequence/nonce
+            used to announce the result.
+          </p>
+        </div>
+        <ol>
+          <li>
+            <b>1</b>
+            <span>DID resolves its Ed25519 public key.</span>
+          </li>
+          <li>
+            <b>2</b>
+            <span>Signature proves receipt authorship and integrity.</span>
+          </li>
+          <li>
+            <b>3</b>
+            <span>Room record anchors the same author, seq and nonce.</span>
+          </li>
+          <li>
+            <b>4</b>
+            <span>Artifact content can reproduce the recorded SHA-256.</span>
+          </li>
+        </ol>
+        <small>
+          It does not prove output quality, trust, payment or FLOP/reward
+          eligibility. Those require separate policies and evidence.
+        </small>
+      </section>
       <div className="proof-layout">
         <section>
           <Field label="COREMESH WORK RECEIPT">
             <CoreTextarea
               rows={12}
               value={raw}
-              onChange={(event) => setRaw(event.target.value)}
+              onChange={(event) => {
+                setRaw(event.target.value);
+                setResult(undefined);
+              }}
               placeholder="Paste receipt JSON…"
             />
           </Field>
           <Field label="ARTIFACT CONTENT">
             <CoreTextarea
               value={artifactContent}
-              onChange={(event) => setArtifactContent(event.target.value)}
+              onChange={(event) => {
+                setArtifactContent(event.target.value);
+                setResult(undefined);
+              }}
               placeholder="Paste artifact content to verify SHA-256…"
             />
           </Field>
@@ -1022,13 +1193,32 @@ export function ProofsSurface() {
                 DID: result.did,
                 SIGNATURE: result.signature,
                 'ROOM RECORD': result.room,
+                'TASK RELATION': result.task,
                 'ARTIFACT HASH': result.artifact,
-              }).map(([label, valid]) => (
+              }).map(([label, status]) => (
                 <div key={label}>
                   <span>{label}</span>
-                  <strong className={valid ? 'valid' : 'invalid'}>
-                    {valid ? <CheckCircle2 size={14} /> : <XCircle size={14} />}
-                    {valid ? 'VALID' : 'NOT VERIFIED'}
+                  <strong
+                    className={
+                      status === 'valid'
+                        ? 'valid'
+                        : status === 'invalid'
+                          ? 'invalid'
+                          : 'unchecked'
+                    }
+                  >
+                    {status === 'valid' ? (
+                      <CheckCircle2 size={14} />
+                    ) : status === 'invalid' ? (
+                      <XCircle size={14} />
+                    ) : (
+                      <CirclePause size={14} />
+                    )}
+                    {status === 'valid'
+                      ? 'VALID'
+                      : status === 'invalid'
+                        ? 'NOT VERIFIED'
+                        : 'NOT CHECKED'}
                   </strong>
                 </div>
               ))}
@@ -1036,7 +1226,7 @@ export function ProofsSurface() {
           ) : (
             <EmptyState
               title="AWAITING RECEIPT"
-              body="Verification checks local DID, signature, room relationship and artifact SHA-256 independently."
+              body="Paste or load a receipt. Verification works from did:key public material and checks each evidence layer independently."
             />
           )}
         </aside>
@@ -1044,7 +1234,10 @@ export function ProofsSurface() {
       <div className="receipt-ledger">
         {state.receipts.map((receipt) => (
           <button
-            onClick={() => setRaw(JSON.stringify(receipt, null, 2))}
+            onClick={() => {
+              setRaw(JSON.stringify(receipt, null, 2));
+              setResult(undefined);
+            }}
             key={`${receipt.taskId}-${receipt.nonce}`}
           >
             <FileCheck2 size={14} />

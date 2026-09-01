@@ -56,6 +56,7 @@ export interface Provider {
     | 'openai-compatible'
     | 'anthropic'
     | 'gemini'
+    | 'deepseek'
     | 'openrouter'
     | 'groq'
     | 'together'
@@ -142,7 +143,8 @@ export interface Worker {
     | 'research-worker'
     | 'proof-verifier'
     | 'archivist'
-    | 'model-router';
+    | 'model-router'
+    | 'presence-worker';
   enabled: boolean;
   rooms: string[];
   trigger: string;
