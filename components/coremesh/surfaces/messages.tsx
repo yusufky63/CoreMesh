@@ -17,6 +17,7 @@ import {
   signTechnocoreMessage,
 } from '@/lib/crypto';
 import { HttpTechnocoreAdapter } from '@/lib/adapters';
+import type { Room } from '@/lib/domain';
 import { useCoreMesh } from '@/lib/store';
 import {
   CoreButton,
@@ -33,12 +34,35 @@ import {
   shortDid,
 } from '../common';
 
+const SENT_THREAD = '__coremesh_sent__';
+
+function isDirectMessageRoom(roomId: string, roomIds: Set<string>) {
+  return roomIds.has(roomId) || /^tc_mb-(?:p-)?/u.test(roomId);
+}
+
 export function MessagesSurface() {
   const state = useCoreMesh();
   const [composeOpen, setComposeOpen] = useState(false);
-  const [selectedDid, setSelectedDid] = useState(
-    state.selectedId?.startsWith('did:') ? state.selectedId : '',
-  );
+  const [selectedDid, setSelectedDid] = useState(() => {
+    if (state.selectedId?.startsWith('did:')) return state.selectedId;
+    const identityDids = new Set(
+      state.identities.map((identity) => identity.did),
+    );
+    const mailboxRoomIds = new Set(
+      state.rooms
+        .filter(
+          (room) => room.kind === 'mailbox' || room.kind === 'private-mailbox',
+        )
+        .map((room) => room.id),
+    );
+    return state.messages.some(
+      (message) =>
+        identityDids.has(message.from) &&
+        isDirectMessageRoom(message.roomId, mailboxRoomIds),
+    )
+      ? SENT_THREAD
+      : '';
+  });
   const [recipientDid, setRecipientDid] = useState('');
   const [mailbox, setMailbox] = useState('');
   const [peerXKey, setPeerXKey] = useState('');
@@ -51,9 +75,20 @@ export function MessagesSurface() {
   );
   const [selectedMessageId, setSelectedMessageId] = useState('');
   const feedRef = useRef<HTMLDivElement>(null);
-  const ownDids = state.identities.map((identity) => identity.did);
-  const directRooms = state.rooms.filter(
-    (room) => room.kind === 'mailbox' || room.kind === 'private-mailbox',
+  const ownDids = useMemo(
+    () => state.identities.map((identity) => identity.did),
+    [state.identities],
+  );
+  const directRooms = useMemo(
+    () =>
+      state.rooms.filter(
+        (room) => room.kind === 'mailbox' || room.kind === 'private-mailbox',
+      ),
+    [state.rooms],
+  );
+  const directRoomIds = useMemo(
+    () => new Set(directRooms.map((room) => room.id)),
+    [directRooms],
   );
   const participants = useMemo(
     () => [
@@ -61,13 +96,13 @@ export function MessagesSurface() {
         state.messages
           .filter(
             (message) =>
-              directRooms.some((room) => room.id === message.roomId) &&
+              isDirectMessageRoom(message.roomId, directRoomIds) &&
               !ownDids.includes(message.from),
           )
           .map((message) => message.from),
       ),
     ],
-    [state.messages, directRooms, ownDids],
+    [state.messages, directRoomIds, ownDids],
   );
   const requests = participants.filter(
     (did) =>
@@ -82,7 +117,7 @@ export function MessagesSurface() {
           ...state.messages
             .filter(
               (message) =>
-                directRooms.some((room) => room.id === message.roomId) &&
+                isDirectMessageRoom(message.roomId, directRoomIds) &&
                 ownDids.includes(message.from) &&
                 message.recipientDid &&
                 !ownDids.includes(message.recipientDid),
@@ -91,7 +126,7 @@ export function MessagesSurface() {
         ]),
       ].filter((did) => !state.blockedDids.includes(did)),
     [
-      directRooms,
+      directRoomIds,
       ownDids,
       state.acceptedMessageDids,
       state.blockedDids,
@@ -101,20 +136,33 @@ export function MessagesSurface() {
   const activeIdentity =
     state.identities.find((identity) => identity.id === activeIdentityId) ||
     state.identities[0];
+  const sentMessages = useMemo(
+    () =>
+      state.messages
+        .filter(
+          (message) =>
+            isDirectMessageRoom(message.roomId, directRoomIds) &&
+            ownDids.includes(message.from),
+        )
+        .sort((a, b) => a.createdAt.localeCompare(b.createdAt)),
+    [directRoomIds, ownDids, state.messages],
+  );
   const threadMessages = useMemo(
     () =>
-      selectedDid
-        ? state.messages
-            .filter(
-              (message) =>
-                directRooms.some((room) => room.id === message.roomId) &&
-                (message.from === selectedDid ||
-                  (ownDids.includes(message.from) &&
-                    message.recipientDid === selectedDid)),
-            )
-            .sort((a, b) => a.createdAt.localeCompare(b.createdAt))
-        : [],
-    [directRooms, ownDids, selectedDid, state.messages],
+      selectedDid === SENT_THREAD
+        ? sentMessages
+        : selectedDid
+          ? state.messages
+              .filter(
+                (message) =>
+                  isDirectMessageRoom(message.roomId, directRoomIds) &&
+                  (message.from === selectedDid ||
+                    (ownDids.includes(message.from) &&
+                      message.recipientDid === selectedDid)),
+              )
+              .sort((a, b) => a.createdAt.localeCompare(b.createdAt))
+          : [],
+    [directRoomIds, ownDids, selectedDid, sentMessages, state.messages],
   );
   const selectedMessage = threadMessages.find(
     (message) => message.id === selectedMessageId,
@@ -123,7 +171,7 @@ export function MessagesSurface() {
     state.messages
       .filter(
         (message) =>
-          directRooms.some((room) => room.id === message.roomId) &&
+          isDirectMessageRoom(message.roomId, directRoomIds) &&
           (message.from === did || message.recipientDid === did),
       )
       .sort((a, b) => b.createdAt.localeCompare(a.createdAt))[0];
@@ -224,28 +272,39 @@ export function MessagesSurface() {
       return state.notify('Unlock the signing identity in Vault.', 'error');
     if (!state.protocol.connected)
       return state.notify('Technocore is not connected.', 'error');
+    const normalizedRecipientDid = recipientDid.trim();
     let targetMailbox = mailbox.trim();
-    if (!targetMailbox && recipientDid.startsWith('did:key:')) {
+    if (!targetMailbox && normalizedRecipientDid.startsWith('did:key:')) {
       const profile = await resolveRecipient();
       targetMailbox = profile?.mailbox || '';
     }
     if (
-      !recipientDid.startsWith('did:key:') ||
+      !normalizedRecipientDid.startsWith('did:key:') ||
       !targetMailbox.startsWith('mb-')
     )
       return state.notify(
         'A did:key recipient and mailbox address are required.',
         'error',
       );
-    let room = state.rooms.find((item) => item.name === targetMailbox);
-    if (!room)
-      room = state.createRoom(
-        targetMailbox.replace(/^mb-p-|^mb-/, ''),
-        targetMailbox.startsWith('mb-p-') ? 'private-mailbox' : 'mailbox',
-        `Direct mailbox for ${shortDid(recipientDid)}`,
-        activeIdentity.did,
-        'technocore',
-      );
+    const canonicalRoomId = `tc_${targetMailbox}`;
+    let room: Room | undefined = state.rooms.find(
+      (item) => item.id === canonicalRoomId || item.name === targetMailbox,
+    );
+    if (!room) {
+      room = {
+        id: canonicalRoomId,
+        name: targetMailbox,
+        kind: targetMailbox.startsWith('mb-p-') ? 'private-mailbox' : 'mailbox',
+        topic: `Direct mailbox for ${shortDid(normalizedRecipientDid)}`,
+        source: 'technocore',
+        createdAt: new Date().toISOString(),
+        ownerDid: activeIdentity.did,
+        bookmarked: true,
+        messageCount: 0,
+        signedPercent: 0,
+      };
+      state.addRoom(room);
+    }
     let payload = text.trim();
     if (e2e) {
       const xKey = state.unlockedXKeys[activeIdentity.id];
@@ -292,7 +351,7 @@ export function MessagesSurface() {
         id: `tcsent_${targetMailbox}_${nonce}`,
         roomId: room.id,
         from: activeIdentity.did,
-        recipientDid,
+        recipientDid: normalizedRecipientDid,
         text: signed.text,
         createdAt: new Date().toISOString(),
         seq: nonce,
@@ -306,9 +365,10 @@ export function MessagesSurface() {
       ).sendSignedMessage(targetMailbox, outgoing);
       const normalized = received.map((message) => ({
         ...message,
+        roomId: room.id,
         recipientDid:
           message.from === activeIdentity.did
-            ? recipientDid
+            ? normalizedRecipientDid
             : activeIdentity.did,
         encrypted:
           e2e ||
@@ -332,8 +392,8 @@ export function MessagesSurface() {
     } finally {
       setBusy(false);
     }
-    state.acceptMessageDid(recipientDid);
-    setSelectedDid(recipientDid);
+    state.acceptMessageDid(normalizedRecipientDid);
+    setSelectedDid(normalizedRecipientDid);
     setComposeOpen(false);
     setText('');
     state.notify(
@@ -422,6 +482,24 @@ export function MessagesSurface() {
       )}
       <div className="messages-layout">
         <aside className="thread-list">
+          <button
+            className={selectedDid === SENT_THREAD ? 'active' : ''}
+            onClick={() => {
+              setSelectedDid(SENT_THREAD);
+              setSelectedMessageId('');
+            }}
+          >
+            <span className="sent-thread-icon">
+              <Send size={14} />
+            </span>
+            <span>
+              <strong>SENT</strong>
+              <small>
+                {sentMessages.length} SIGNED MESSAGE
+                {sentMessages.length === 1 ? '' : 'S'}
+              </small>
+            </span>
+          </button>
           {visibleThreads.map((did) => (
             <button
               className={selectedDid === did ? 'active' : ''}
@@ -448,18 +526,34 @@ export function MessagesSurface() {
           {selectedDid ? (
             <>
               <header>
-                <Glyph did={selectedDid} size={3} />
+                {selectedDid === SENT_THREAD ? (
+                  <span className="sent-thread-icon">
+                    <Send size={14} />
+                  </span>
+                ) : (
+                  <Glyph did={selectedDid} size={3} />
+                )}
                 <div>
-                  <strong>{shortDid(selectedDid)}</strong>
-                  <span>✓ SIGNED ≠ ★ TRUSTED</span>
+                  <strong>
+                    {selectedDid === SENT_THREAD
+                      ? 'SENT MESSAGES'
+                      : shortDid(selectedDid)}
+                  </strong>
+                  <span>
+                    {selectedDid === SENT_THREAD
+                      ? 'ALL OUTGOING SIGNED RECORDS'
+                      : '✓ SIGNED ≠ ★ TRUSTED'}
+                  </span>
                 </div>
-                <CoreButton
-                  variant="outline"
-                  onClick={() => state.toggleBlock(selectedDid)}
-                >
-                  <Ban size={12} />
-                  BLOCK
-                </CoreButton>
+                {selectedDid !== SENT_THREAD && (
+                  <CoreButton
+                    variant="outline"
+                    onClick={() => state.toggleBlock(selectedDid)}
+                  >
+                    <Ban size={12} />
+                    BLOCK
+                  </CoreButton>
+                )}
               </header>
               <div className="message-feed compact" ref={feedRef}>
                 {threadMessages.map((message) => (

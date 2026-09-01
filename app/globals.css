@@ -1582,6 +1582,14 @@ h1 {
   border-left: 2px solid var(--signal-cyan);
   background: var(--bg-2);
 }
+.sent-thread-icon {
+  width: 31px;
+  height: 31px;
+  display: grid;
+  place-items: center;
+  border: 1px solid var(--line);
+  color: var(--signal-cyan);
+}
 .thread-list button span {
   display: grid;
   gap: 5px;
