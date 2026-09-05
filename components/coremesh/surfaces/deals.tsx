@@ -51,6 +51,15 @@ const kindLabel: Record<TclkFoldEntry['kind'], string> = {
   noise: 'NOT A FRAME',
 };
 
+/** Every DID that signed the offer or an accept for a deal. */
+function dealParties(deal: TclkDealSummary): (string | undefined)[] {
+  return [
+    deal.offer?.from,
+    deal.offerRecord?.sender,
+    ...deal.acceptRecords.map((record) => record.sender),
+  ];
+}
+
 function sortRecords(records: TclkTranscriptRecord[]) {
   return [...records].sort(
     (a, b) =>
@@ -104,6 +113,27 @@ export function DealsSurface() {
       ),
     [scan.deals],
   );
+  const [query, setQuery] = useState('');
+  const [mineOnly, setMineOnly] = useState(false);
+  const ownDids = useMemo(
+    () => new Set(state.identities.map((identity) => identity.did)),
+    [state.identities],
+  );
+  const visibleDeals = useMemo(() => {
+    const needle = query.trim().toLowerCase();
+    return deals.filter((deal) => {
+      if (mineOnly && !dealParties(deal).some((did) => did && ownDids.has(did)))
+        return false;
+      if (!needle) return true;
+      return [
+        deal.offerId,
+        deal.contract,
+        ...dealParties(deal),
+        deal.offer?.asset,
+        ...(deal.offer?.rails || []),
+      ].some((value) => value?.toLowerCase().includes(needle));
+    });
+  }, [deals, query, mineOnly, ownDids]);
   const selectedDeal = deals.find((deal) => deal.offerId === selectedOfferId);
   const selectedRoomName = selectedDeal?.contract
     ? dealRoom(selectedDeal.contract)
@@ -387,7 +417,26 @@ export function DealsSurface() {
               <span>EXPIRES</span>
               <span>STATUS</span>
             </div>
-            {deals.map((deal) => {
+            <div className="deal-filter">
+              <CoreInput
+                value={query}
+                onChange={(event) => setQuery(event.target.value)}
+                placeholder="Filter by DID, offer id, contract, asset or rail…"
+              />
+              <label className="check-row">
+                <input
+                  type="checkbox"
+                  checked={mineOnly}
+                  onChange={(event) => setMineOnly(event.target.checked)}
+                  disabled={!ownDids.size}
+                />
+                <span>MY DIDS ONLY</span>
+              </label>
+              <span className="deal-filter-count">
+                {visibleDeals.length} / {deals.length}
+              </span>
+            </div>
+            {visibleDeals.map((deal) => {
               const status = statuses[deal.offerId] || 'UNKNOWN';
               const expiry = deal.offer
                 ? describeDeadline(deal.offer.expiresMs, now)
@@ -432,6 +481,13 @@ export function DealsSurface() {
               <p className="deal-note">
                 {scan.entries.length} lines read, but none is an authenticated
                 tclk1 frame.
+              </p>
+            )}
+            {deals.length > 0 && !visibleDeals.length && (
+              <p className="deal-note">
+                {mineOnly
+                  ? 'None of your identities appears in the scanned deals. Your DID shows up here once it signs a tclk1 offer or accept.'
+                  : 'No deal matches the filter.'}
               </p>
             )}
           </section>

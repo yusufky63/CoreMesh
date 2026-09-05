@@ -7277,3 +7277,27 @@ h1 {
 .entity-data dd .check-list {
   margin-top: 8px;
 }
+
+.deal-filter {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 12px;
+  padding: 10px 0;
+  border-bottom: 1px solid var(--line);
+}
+.deal-filter .core-input {
+  flex: 1 1 260px;
+}
+.deal-filter .check-row span {
+  font:
+    9px var(--font-space-mono),
+    monospace;
+  letter-spacing: 0.08em;
+}
+.deal-filter-count {
+  color: var(--text-muted);
+  font:
+    9px var(--font-space-mono),
+    monospace;
+}
