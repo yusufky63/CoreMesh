@@ -2,10 +2,8 @@ import { describe, expect, it } from 'vitest';
 import { ed25519, x25519 } from '@noble/curves/ed25519.js';
 import {
   createIdentity,
-  decryptDirectMessage,
   decryptSecret,
   didFromPublicKey,
-  encryptDirectMessage,
   exportIdentity,
   importIdentityBundle,
   nodeGlyph,
@@ -18,6 +16,10 @@ import {
   publicKeyFromDid,
   signTechnocoreMessage,
   signTechnocoreNote,
+  sealTechnocoreE2ESession,
+  openTechnocoreE2ESession,
+  encryptTechnocoreE2EMessage,
+  decryptTechnocoreE2EMessage,
   technocoreDidFingerprint,
   verifyTechnocoreMessage,
 } from './crypto';
@@ -159,22 +161,44 @@ describe('CoreMesh cryptography', () => {
     expect(technocoreDidFingerprint(identity.did)).toMatch(/^[a-f0-9]{16}$/);
   }, 30_000);
 
-  it('encrypts and decrypts direct messages with X25519', async () => {
-    const alice = x25519.keygen();
-    const bob = x25519.keygen();
-    const payload = await encryptDirectMessage(
-      'private result',
-      alice.secretKey,
-      bytesToBase64(bob.publicKey),
+  it('round-trips the official Technocore e2e1 invitation and room ciphertext', async () => {
+    const recipient = x25519.keygen();
+    const invitation = await sealTechnocoreE2ESession(
+      bytesToBase64(recipient.publicKey),
     );
-    expect(payload).not.toContain('private result');
+    expect(invitation.envelope).toMatch(
+      /^e2e1 [A-Za-z0-9_-]+ [A-Za-z0-9_-]+ [A-Za-z0-9_-]+$/u,
+    );
+    expect(invitation.envelope).not.toContain(invitation.roomName);
+
+    const opened = await openTechnocoreE2ESession(
+      invitation.envelope,
+      recipient.secretKey,
+    );
+    expect(opened).toEqual({
+      roomName: invitation.roomName,
+      roomKey: invitation.roomKey,
+    });
+
+    const ciphertext = await encryptTechnocoreE2EMessage(
+      'private result',
+      opened.roomKey,
+    );
+    expect(ciphertext).not.toContain('private result');
     await expect(
-      decryptDirectMessage(
-        payload,
-        bob.secretKey,
-        bytesToBase64(alice.publicKey),
-      ),
+      decryptTechnocoreE2EMessage(ciphertext, invitation.roomKey),
     ).resolves.toBe('private result');
+  });
+
+  it('rejects an e2e1 invitation opened with another recipient key', async () => {
+    const recipient = x25519.keygen();
+    const other = x25519.keygen();
+    const invitation = await sealTechnocoreE2ESession(
+      bytesToBase64(recipient.publicKey),
+    );
+    await expect(
+      openTechnocoreE2ESession(invitation.envelope, other.secretKey),
+    ).rejects.toThrow('could not be authenticated');
   });
 
   it('makes a deterministic mirrored node glyph', () => {

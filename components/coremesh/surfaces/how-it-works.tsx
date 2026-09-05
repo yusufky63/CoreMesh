@@ -14,6 +14,7 @@ import {
   UserRoundCog,
 } from 'lucide-react';
 import { useCoreMesh } from '@/lib/store';
+import { coreMeshPath } from '@/lib/routes';
 import { CoreButton, ProtocolStrip, SectionHeader } from '../common';
 
 const flow = [
@@ -44,7 +45,7 @@ const flow = [
   {
     icon: Bot,
     title: '5. Worker',
-    body: 'Give the agent one bounded job. Every worker starts paused with cooldowns, budgets, dedupe and a kill switch.',
+    body: 'Give the agent one bounded job. Every worker starts paused. Cooldown, hourly runs, per-minute events, daily tokens and cost, dedupe and a loop guard are enforced on every run.',
     view: 'workers',
   },
   {
@@ -56,13 +57,13 @@ const flow = [
   {
     icon: Fingerprint,
     title: '7. Review and sign',
-    body: 'The model result is held for operator review. A user-controlled identity signs only the message or artifact you approve.',
-    view: 'messages',
+    body: 'The model result is held in the run record. You approve and post it as a signed line, or discard it. Nothing is posted automatically.',
+    view: 'workers',
   },
   {
     icon: ShieldCheck,
     title: '8. Proof',
-    body: 'Receipts bind the task, agent DID, artifact hash, room sequence and signature so anyone can verify the work later.',
+    body: 'Receipts bind the task, agent DID, artifact hash, room sequence and signature so anyone can verify the work later. Deals replays tclk/1 escrow transcripts the same way.',
     view: 'proofs',
   },
 ] as const;
@@ -72,17 +73,18 @@ const tested = [
   'Chat completions',
   'Thinking + effort control',
   'Strict JSON output',
-  'Tool-call contract',
-  'Streaming responses',
-  'Responses API compatibility',
-  'Token and cache accounting',
+  'Token, reasoning and cache accounting',
+  'Runtime fallback on failure',
+  'Operator review before any post',
+  'Hosted relay with access token',
 ];
+const notEnabled = ['Streaming', 'Tool execution', 'Responses API'];
 
 export function HowItWorksSurface() {
   const state = useCoreMesh();
   const navigate = (view: string) => {
     state.setView(view);
-    const path = view === 'how-it-works' ? '/how-it-works' : `/${view}`;
+    const path = coreMeshPath(view);
     if (window.location.pathname !== path)
       window.history.pushState({ view }, '', path);
   };
@@ -174,14 +176,17 @@ export function HowItWorksSurface() {
         <div className="deepseek-steps">
           <ol>
             <li>
-              Open Providers. Cloud keys are configured once in the private
-              production server secret store.
+              Create or import a DID in Vault. Everything else attaches to it.
             </li>
-            <li>Press Test to discover live models—no key re-entry.</li>
-            <li>Create a runtime and choose the DeepSeek V4 preset.</li>
-            <li>Attach it to an agent, then create a paused worker.</li>
             <li>
-              Enable the worker, execute it and review the recorded output.
+              Open Providers and press Test. Hosted keys live on the server; if
+              the deployment uses a relay token, paste it once in Settings.
+            </li>
+            <li>Create a runtime and choose the DeepSeek V4 preset.</li>
+            <li>Connect an agent to the identity and runtime, then create a paused worker with a room.</li>
+            <li>
+              Resume the worker, run Preflight, then Execute. Approve and post
+              the reviewed output as a signed line, or discard it.
             </li>
           </ol>
           <div className="deepseek-status">
@@ -207,8 +212,9 @@ export function HowItWorksSurface() {
           <p>
             CoreMesh uses the Chat Completions path for worker runs and records
             the final answer, model, latency, tokens, reasoning usage and cache
-            hits. Streaming, tools and Responses compatibility are validated for
-            future worker types without granting tools automatically.
+            hits. Not enabled in the product runtime:{' '}
+            {notEnabled.join(', ').toLowerCase()}. A model that supports tools
+            never gets them without a bounded worker policy.
           </p>
         </div>
         <ul>

@@ -23,7 +23,13 @@ import {
   importRawIdentity,
   randomId,
 } from '@/lib/crypto';
-import type { Identity, Provider, RuntimeType } from '@/lib/domain';
+import type {
+  Identity,
+  Provider,
+  RuntimeConnection,
+  RuntimeType,
+} from '@/lib/domain';
+import { WORKER_BUDGET_DEFAULTS } from '@/lib/domain';
 import { HttpAgentRuntime, HttpTechnocoreAdapter } from '@/lib/adapters';
 import { useCoreMesh } from '@/lib/store';
 import {
@@ -625,6 +631,8 @@ export function AgentsSurface() {
   const [behavior, setBehavior] = useState(
     'Provide useful technical contributions. Do not post merely to remain active. Prefer concise evidence-backed messages.',
   );
+  const [confirmRemove, setConfirmRemove] = useState(false);
+  const [knowledge, setKnowledge] = useState('');
   const agent = state.agents.find((item) => item.id === selected);
   const identity = agent
     ? state.identities.find((item) => item.id === agent.identityId)
@@ -706,6 +714,20 @@ export function AgentsSurface() {
               }
             />
           </section>
+          <section className="behavior-panel">
+            <span>
+              REFERENCE KNOWLEDGE · only chunks matching a question reach the
+              model
+            </span>
+            <CoreTextarea
+              rows={8}
+              value={agent.knowledge || ''}
+              onChange={(event) =>
+                state.updateAgent(agent.id, { knowledge: event.target.value })
+              }
+              placeholder="Paste a manual, spec or notes. Use markdown headings so chunks stay small. Example: the Technocore llms.txt."
+            />
+          </section>
           <div className="card-actions">
             <CoreButton
               variant="outline"
@@ -715,9 +737,49 @@ export function AgentsSurface() {
             >
               {agent.trusted ? 'REMOVE LOCAL TRUST' : '★ TRUST LOCALLY'}
             </CoreButton>
-            <CoreButton onClick={() => state.setView('messages', identity.did)}>
-              MESSAGE
+            <CoreButton
+              onClick={() => {
+                state.setView('workers');
+                window.history.pushState({ view: 'workers' }, '', '/workers');
+              }}
+            >
+              WORKERS
             </CoreButton>
+            {confirmRemove ? (
+              <>
+                <CoreButton
+                  variant="destructive"
+                  onClick={() => {
+                    const workerCount = state.workers.filter(
+                      (worker) => worker.agentId === agent.id,
+                    ).length;
+                    state.removeAgent(agent.id);
+                    setConfirmRemove(false);
+                    setSelected('');
+                    state.notify(
+                      `Agent removed with ${workerCount} worker${workerCount === 1 ? '' : 's'}. The identity stays in Vault.`,
+                      'success',
+                    );
+                  }}
+                >
+                  CONFIRM REMOVE
+                </CoreButton>
+                <CoreButton
+                  variant="outline"
+                  onClick={() => setConfirmRemove(false)}
+                >
+                  CANCEL
+                </CoreButton>
+              </>
+            ) : (
+              <CoreButton
+                variant="outline"
+                className="danger-button"
+                onClick={() => setConfirmRemove(true)}
+              >
+                REMOVE AGENT
+              </CoreButton>
+            )}
           </div>
         </div>
       </>
@@ -792,7 +854,27 @@ export function AgentsSurface() {
       {!state.agents.length && (
         <EmptyState
           title="NO CONNECTED AGENTS"
-          body="An agent combines a user-controlled identity with any supported runtime—including Identity Only."
+          body={
+            state.identities.length
+              ? 'An agent combines a user-controlled identity with any supported runtime, including Identity Only. Connect one to start.'
+              : 'An agent needs a user-controlled identity first. Create or import a DID in Vault, then come back to connect the agent.'
+          }
+          action={
+            state.identities.length ? (
+              <CoreButton onClick={() => setOpen(true)}>
+                CONNECT AGENT
+              </CoreButton>
+            ) : (
+              <CoreButton
+                onClick={() => {
+                  state.setView('vault');
+                  window.history.pushState({ view: 'vault' }, '', '/vault');
+                }}
+              >
+                CREATE IDENTITY IN VAULT
+              </CoreButton>
+            )
+          }
         />
       )}
       <Modal
@@ -853,6 +935,17 @@ export function AgentsSurface() {
               onChange={(event) => setBehavior(event.target.value)}
             />
           </Field>
+          <Field
+            label="REFERENCE KNOWLEDGE (OPTIONAL)"
+            hint="A manual or notes the agent may cite. Only the chunks that match a question are sent, so size is not a token problem."
+          >
+            <CoreTextarea
+              rows={6}
+              value={knowledge}
+              onChange={(event) => setKnowledge(event.target.value)}
+              placeholder="Paste text with markdown headings…"
+            />
+          </Field>
           <CoreButton
             onClick={() => {
               state.addAgent({
@@ -866,6 +959,7 @@ export function AgentsSurface() {
                   .map((item) => item.trim())
                   .filter(Boolean),
                 behavior,
+                knowledge: knowledge.trim() || undefined,
                 trusted: false,
               });
               setOpen(false);
@@ -993,6 +1087,7 @@ export function ProvidersSurface() {
       runtime,
       provider,
       secret || undefined,
+      state.relayAccessToken || undefined,
     ).test();
     state.updateProvider(provider.id, {
       connected: result.ok,
@@ -1182,26 +1277,57 @@ export function ProvidersSurface() {
 export function RuntimesSurface() {
   const state = useCoreMesh();
   const [open, setOpen] = useState(false);
-  const [name, setName] = useState('Local Qwen');
-  const [type, setType] = useState<RuntimeType>('local-model');
-  const [providerId, setProviderId] = useState(state.providers[0]?.id || '');
+  const [name, setName] = useState('New runtime');
+  const [type, setType] = useState<RuntimeType>('managed-ai');
+  const [providerId, setProviderId] = useState('');
   const [model, setModel] = useState('');
   const [endpoint, setEndpoint] = useState('');
   const [temperature, setTemperature] = useState(0.3);
-  const [maxOutput, setMaxOutput] = useState(1800);
-  const [timeout, setTimeout] = useState(45);
+  const [maxOutput, setMaxOutput] = useState(2048);
+  const [timeout, setTimeout] = useState(60);
+  const [pricePerMillion, setPricePerMillion] = useState('');
   const [fallbackRuntimeId, setFallbackRuntimeId] = useState('');
   const [thinking, setThinking] = useState(false);
   const [reasoningEffort, setReasoningEffort] = useState<
     'low' | 'high' | 'max'
   >('high');
   const [responseMode, setResponseMode] = useState<'text' | 'json'>('text');
+  const [editingId, setEditingId] = useState('');
   const selectedProvider = state.providers.find(
     (provider) => provider.id === providerId,
   );
+  const openEdit = (runtime: RuntimeConnection) => {
+    setEditingId(runtime.id);
+    setName(runtime.name);
+    setType(runtime.type);
+    setProviderId(runtime.providerId || '');
+    setModel(runtime.model || '');
+    setEndpoint(runtime.endpoint || '');
+    setTemperature(runtime.temperature ?? 0.3);
+    setMaxOutput(runtime.maxOutput ?? 2048);
+    setTimeout(runtime.timeout ?? 60);
+    setPricePerMillion(
+      runtime.pricePerMillionTokens ? String(runtime.pricePerMillionTokens) : '',
+    );
+    setFallbackRuntimeId(runtime.fallbackRuntimeId || '');
+    setThinking(runtime.thinking ?? false);
+    setReasoningEffort(runtime.reasoningEffort || 'high');
+    setResponseMode(runtime.responseMode || 'text');
+    setOpen(true);
+  };
+  const localKinds = new Set<Provider['kind']>([
+    'lm-studio',
+    'ollama',
+    'custom-http',
+  ]);
   const selectProvider = (nextId: string) => {
     const provider = state.providers.find((item) => item.id === nextId);
     setProviderId(nextId);
+    if (provider) {
+      setType(localKinds.has(provider.kind) ? 'local-model' : 'managed-ai');
+      setName(`${provider.name} runtime`);
+      setModel(provider.models?.[0] || '');
+    }
     if (provider?.kind === 'deepseek') {
       setName('DeepSeek V4 Runtime');
       setType('managed-ai');
@@ -1274,9 +1400,19 @@ export function RuntimesSurface() {
                   {runtime.thinking
                     ? `THINK ${runtime.reasoningEffort || 'high'}`
                     : (runtime.temperature ?? 0.3)}{' '}
-                  / {runtime.maxOutput ?? 1800}
+                  / {runtime.maxOutput ?? 2048}
                 </dd>
               </div>
+              {runtime.type !== 'identity-only' && (
+                <div>
+                  <dt>PRICE / 1M</dt>
+                  <dd>
+                    {runtime.pricePerMillionTokens
+                      ? `$${runtime.pricePerMillionTokens} · cost budgets active`
+                      : 'not set · cost not tracked'}
+                  </dd>
+                </div>
+              )}
               <div>
                 <dt>OUTPUT</dt>
                 <dd>{(runtime.responseMode || 'text').toUpperCase()}</dd>
@@ -1289,15 +1425,54 @@ export function RuntimesSurface() {
                   )?.name || 'NONE'}
                 </dd>
               </div>
+              <div>
+                <dt>USED BY</dt>
+                <dd>
+                  {state.agents.filter((agent) => agent.runtimeId === runtime.id)
+                    .length}{' '}
+                  agents
+                </dd>
+              </div>
             </dl>
+            {runtime.id !== 'runtime_identity' && (
+              <div className="card-actions">
+                <CoreButton variant="outline" onClick={() => openEdit(runtime)}>
+                  EDIT
+                </CoreButton>
+                <CoreButton
+                  variant="outline"
+                  className="danger-button"
+                  disabled={
+                    state.agents.some((agent) => agent.runtimeId === runtime.id) ||
+                    state.workers.some(
+                      (worker) => worker.runtimeOverrideId === runtime.id,
+                    )
+                  }
+                  title="Detach it from every agent first"
+                  onClick={() => {
+                    state.removeRuntime(runtime.id);
+                    state.notify('Runtime removed.', 'success');
+                  }}
+                >
+                  REMOVE
+                </CoreButton>
+              </div>
+            )}
           </article>
         ))}
       </div>
       <Modal
         open={open}
-        onOpenChange={setOpen}
-        title="CONNECT RUNTIME"
-        description="Choose how this agent runs."
+        onOpenChange={(next) => {
+          setOpen(next);
+          if (!next) setEditingId('');
+        }}
+        title={editingId ? 'EDIT RUNTIME' : 'CONNECT RUNTIME'}
+        description={
+          editingId
+            ? 'Changes apply to every agent using this runtime.'
+            : 'Choose how this agent runs.'
+        }
         wide
       >
         <div className="form-grid two">
@@ -1425,7 +1600,14 @@ export function RuntimesSurface() {
                   <option value="json">Strict JSON</option>
                 </select>
               </Field>
-              <Field label="MAX OUTPUT TOKENS">
+              <Field
+                label="MAX OUTPUT TOKENS"
+                hint={
+                  selectedProvider?.kind === 'deepseek' && thinking
+                    ? `Thinking shares this budget. Below ${WORKER_BUDGET_DEFAULTS.minOutputWithThinking} the answer can come back empty, so it is raised on save. Workers apply their own smaller per-run cap.`
+                    : 'Upper bound per call. Workers apply their own smaller per-run cap.'
+                }
+              >
                 <CoreInput
                   type="number"
                   min="1"
@@ -1439,6 +1621,19 @@ export function RuntimesSurface() {
                   min="1"
                   value={timeout}
                   onChange={(event) => setTimeout(Number(event.target.value))}
+                />
+              </Field>
+              <Field
+                label="PRICE PER 1M TOKENS (USD, OPTIONAL)"
+                hint="Blended input+output estimate from the provider's pricing page. Enables the daily cost budget on workers."
+              >
+                <CoreInput
+                  type="number"
+                  min="0"
+                  step="0.01"
+                  value={pricePerMillion}
+                  onChange={(event) => setPricePerMillion(event.target.value)}
+                  placeholder="e.g. 1.10"
                 />
               </Field>
               <Field label="FALLBACK RUNTIME">
@@ -1459,17 +1654,35 @@ export function RuntimesSurface() {
           )}
           <CoreButton
             onClick={() => {
-              state.addRuntime({
-                id: randomId('runtime'),
+              const thinkingOn =
+                selectedProvider?.kind === 'deepseek' && thinking;
+              const boundedOutput = thinkingOn
+                ? Math.max(
+                    WORKER_BUDGET_DEFAULTS.minOutputWithThinking,
+                    maxOutput,
+                  )
+                : Math.max(1, maxOutput);
+              if (boundedOutput !== maxOutput)
+                state.notify(
+                  `Max output raised to ${boundedOutput} so thinking leaves room for an answer.`,
+                  'info',
+                );
+              const price = Number(pricePerMillion);
+              const draft = {
                 type,
                 name,
                 providerId: providerId || undefined,
                 endpoint: endpoint || undefined,
                 model: model || undefined,
                 temperature,
-                maxOutput,
-                timeout,
-                fallbackRuntimeId: fallbackRuntimeId || undefined,
+                maxOutput: boundedOutput,
+                timeout: Math.max(1, timeout),
+                pricePerMillionTokens:
+                  Number.isFinite(price) && price > 0 ? price : undefined,
+                fallbackRuntimeId:
+                  fallbackRuntimeId && fallbackRuntimeId !== editingId
+                    ? fallbackRuntimeId
+                    : undefined,
                 thinking:
                   selectedProvider?.kind === 'deepseek' ? thinking : undefined,
                 reasoningEffort:
@@ -1477,13 +1690,26 @@ export function RuntimesSurface() {
                     ? reasoningEffort
                     : undefined,
                 responseMode,
-                status: type === 'identity-only' ? 'connected' : 'untested',
-              });
+              };
+              if (editingId) {
+                state.updateRuntime(editingId, {
+                  ...draft,
+                  status: type === 'identity-only' ? 'connected' : 'untested',
+                });
+                state.notify('Runtime updated.', 'success');
+              } else {
+                state.addRuntime({
+                  id: randomId('runtime'),
+                  ...draft,
+                  status: type === 'identity-only' ? 'connected' : 'untested',
+                });
+                state.notify('Runtime connection saved.', 'success');
+              }
               setOpen(false);
-              state.notify('Runtime connection saved.', 'success');
+              setEditingId('');
             }}
           >
-            CONNECT
+            {editingId ? 'SAVE CHANGES' : 'CONNECT'}
           </CoreButton>
         </div>
       </Modal>

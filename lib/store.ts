@@ -5,6 +5,7 @@ import { persist } from 'zustand/middleware';
 import { ed25519 } from '@noble/curves/ed25519.js';
 import type {
   Agent,
+  E2ESession,
   Identity,
   ProtocolConfig,
   ProtocolMessage,
@@ -20,6 +21,7 @@ import type {
 } from './domain';
 import { didFromPublicKey, randomId, signMessage } from './crypto';
 import { roomPrefix, taskTransitions } from './domain';
+import { evaluateWorker } from './worker-policy';
 
 type Notice = {
   id: string;
@@ -36,8 +38,12 @@ interface CoreMeshState {
   identities: Identity[];
   unlockedKeys: Record<string, Uint8Array>;
   unlockedXKeys: Record<string, Uint8Array>;
+  e2eSessions: E2ESession[];
+  e2eRoomKeys: Record<string, string>;
   providers: Provider[];
   providerSessionSecrets: Record<string, string>;
+  /** Session-only token for the hosted provider relay; never persisted. */
+  relayAccessToken: string;
   runtimes: RuntimeConnection[];
   agents: Agent[];
   rooms: Room[];
@@ -61,13 +67,20 @@ interface CoreMeshState {
   removeIdentity: (id: string) => void;
   setUnlockedKey: (id: string, key?: Uint8Array) => void;
   setUnlockedXKey: (id: string, key?: Uint8Array) => void;
+  upsertE2ESession: (session: E2ESession) => void;
+  setE2ERoomKey: (sessionId: string, roomKey?: string) => void;
   addProvider: (provider: Provider) => void;
   updateProvider: (id: string, patch: Partial<Provider>) => void;
   setProviderSessionSecret: (id: string, secret: string) => void;
+  setRelayAccessToken: (token: string) => void;
   addRuntime: (runtime: RuntimeConnection) => void;
   updateRuntime: (id: string, patch: Partial<RuntimeConnection>) => void;
+  /** Removes an unused runtime; the built-in identity runtime stays. */
+  removeRuntime: (id: string) => void;
   addAgent: (agent: Agent) => void;
   updateAgent: (id: string, patch: Partial<Agent>) => void;
+  /** Removes an agent together with its workers and run records. */
+  removeAgent: (id: string) => void;
   addRoom: (room: Room) => void;
   createRoom: (
     name: string,
@@ -78,10 +91,24 @@ interface CoreMeshState {
   ) => Room;
   addMessage: (message: ProtocolMessage) => void;
   mergeProtocolMessages: (roomId: string, messages: ProtocolMessage[]) => void;
+  replaceProtocolMessages: (
+    roomId: string,
+    messages: ProtocolMessage[],
+  ) => void;
   addWorker: (worker: Worker) => void;
   updateWorker: (id: string, patch: Partial<Worker>) => void;
+  /** Removes a worker together with its run records. */
+  removeWorker: (id: string) => void;
   runWorker: (id: string) => WorkerRun;
+  /** Imports daemon runs; the worker is created paused when unknown. */
+  mergeRuns: (worker: Worker, runs: WorkerRun[]) => void;
   updateRun: (id: string, patch: Partial<WorkerRun>) => void;
+  /** Operator verdict on a reviewed runtime output. */
+  resolveRun: (
+    id: string,
+    outcome: 'posted' | 'discarded',
+    detail: string,
+  ) => void;
   addTask: (task: Task) => void;
   transitionTask: (
     id: string,
@@ -253,8 +280,11 @@ const defaults = {
   identities: [] as Identity[],
   unlockedKeys: {} as Record<string, Uint8Array>,
   unlockedXKeys: {} as Record<string, Uint8Array>,
+  e2eSessions: [] as E2ESession[],
+  e2eRoomKeys: {} as Record<string, string>,
   providers: seedProviders,
   providerSessionSecrets: {} as Record<string, string>,
+  relayAccessToken: '',
   runtimes: seedRuntimes,
   agents: [] as Agent[],
   rooms: seedRooms,
@@ -279,9 +309,28 @@ const defaults = {
     retentionSeconds: 604_800,
     ephemeralTtlSeconds: 900,
     connected: false,
+    status: 'connecting',
+    consecutiveFailures: 0,
     sourceLabel: 'TECHNOCORE · READY',
   } satisfies ProtocolConfig,
 };
+
+/**
+ * The slice that may touch localStorage. Unlocked keys, room keys, provider
+ * session secrets, the relay token and transient notices never persist.
+ */
+export function persistedSlice(state: CoreMeshState): Partial<CoreMeshState> {
+  return {
+    ...state,
+    hydrated: undefined,
+    unlockedKeys: {},
+    unlockedXKeys: {},
+    e2eRoomKeys: {},
+    providerSessionSecrets: {},
+    relayAccessToken: '',
+    notices: [],
+  };
+}
 
 export const useCoreMesh = create<CoreMeshState>()(
   persist<CoreMeshState, [], [], Partial<CoreMeshState>>(
@@ -316,9 +365,13 @@ export const useCoreMesh = create<CoreMeshState>()(
           );
           const unlockedKeys = { ...state.unlockedKeys };
           const unlockedXKeys = { ...state.unlockedXKeys };
+          const e2eRoomKeys = { ...state.e2eRoomKeys };
           const peerXKeys = { ...state.peerXKeys };
           delete unlockedKeys[id];
           delete unlockedXKeys[id];
+          state.e2eSessions
+            .filter((session) => session.identityId === id)
+            .forEach((session) => delete e2eRoomKeys[session.id]);
           delete peerXKeys[identity.did];
           const identities = state.identities.filter((item) => item.id !== id);
 
@@ -335,6 +388,10 @@ export const useCoreMesh = create<CoreMeshState>()(
             ),
             unlockedKeys,
             unlockedXKeys,
+            e2eSessions: state.e2eSessions.filter(
+              (session) => session.identityId !== id,
+            ),
+            e2eRoomKeys,
             peerXKeys,
             trustedDids: state.trustedDids.filter(
               (did) => did !== identity.did,
@@ -356,6 +413,26 @@ export const useCoreMesh = create<CoreMeshState>()(
           else delete next[id];
           return { unlockedXKeys: next };
         }),
+      upsertE2ESession: (session) =>
+        set((state) => ({
+          e2eSessions: [
+            ...state.e2eSessions.filter(
+              (item) =>
+                !(
+                  item.identityId === session.identityId &&
+                  item.roomName === session.roomName
+                ),
+            ),
+            session,
+          ],
+        })),
+      setE2ERoomKey: (sessionId, roomKey) =>
+        set((state) => {
+          const e2eRoomKeys = { ...state.e2eRoomKeys };
+          if (roomKey) e2eRoomKeys[sessionId] = roomKey;
+          else delete e2eRoomKeys[sessionId];
+          return { e2eRoomKeys };
+        }),
       addProvider: (provider) =>
         set((state) => ({ providers: [...state.providers, provider] })),
       updateProvider: (id, patch) =>
@@ -371,6 +448,8 @@ export const useCoreMesh = create<CoreMeshState>()(
           else delete providerSessionSecrets[id];
           return { providerSessionSecrets };
         }),
+      setRelayAccessToken: (relayAccessToken) =>
+        set({ relayAccessToken: relayAccessToken.trim() }),
       addRuntime: (runtime) =>
         set((state) => ({ runtimes: [...state.runtimes, runtime] })),
       updateRuntime: (id, patch) =>
@@ -379,8 +458,38 @@ export const useCoreMesh = create<CoreMeshState>()(
             item.id === id ? { ...item, ...patch } : item,
           ),
         })),
+      removeRuntime: (id) =>
+        set((state) => {
+          if (id === 'runtime_identity') return {};
+          const inUse =
+            state.agents.some((agent) => agent.runtimeId === id) ||
+            state.workers.some((worker) => worker.runtimeOverrideId === id);
+          if (inUse) return {};
+          return {
+            runtimes: state.runtimes
+              .filter((runtime) => runtime.id !== id)
+              .map((runtime) =>
+                runtime.fallbackRuntimeId === id
+                  ? { ...runtime, fallbackRuntimeId: undefined }
+                  : runtime,
+              ),
+          };
+        }),
       addAgent: (agent) =>
         set((state) => ({ agents: [...state.agents, agent] })),
+      removeAgent: (id) =>
+        set((state) => {
+          const workerIds = new Set(
+            state.workers
+              .filter((worker) => worker.agentId === id)
+              .map((worker) => worker.id),
+          );
+          return {
+            agents: state.agents.filter((agent) => agent.id !== id),
+            workers: state.workers.filter((worker) => !workerIds.has(worker.id)),
+            runs: state.runs.filter((run) => !workerIds.has(run.workerId)),
+          };
+        }),
       updateAgent: (id, patch) =>
         set((state) => ({
           agents: state.agents.map((item) =>
@@ -488,8 +597,45 @@ export const useCoreMesh = create<CoreMeshState>()(
             ),
           };
         }),
+      replaceProtocolMessages: (roomId, incoming) =>
+        set((state) => {
+          const latestSeq = incoming.reduce(
+            (highest, message) =>
+              /^\d+$/u.test(message.seq)
+                ? Math.max(highest, Number(message.seq))
+                : highest,
+            0,
+          );
+          return {
+            messages: [
+              ...state.messages.filter((message) => message.roomId !== roomId),
+              ...incoming,
+            ],
+            rooms: state.rooms.map((room) =>
+              room.id === roomId
+                ? {
+                    ...room,
+                    messageCount: latestSeq,
+                    signedPercent: incoming.length
+                      ? Math.round(
+                          (incoming.filter((message) => message.verified)
+                            .length /
+                            incoming.length) *
+                            100,
+                        )
+                      : 0,
+                  }
+                : room,
+            ),
+          };
+        }),
       addWorker: (worker) =>
         set((state) => ({ workers: [...state.workers, worker] })),
+      removeWorker: (id) =>
+        set((state) => ({
+          workers: state.workers.filter((worker) => worker.id !== id),
+          runs: state.runs.filter((run) => run.workerId !== id),
+        })),
       updateWorker: (id, patch) =>
         set((state) => ({
           workers: state.workers.map((item) =>
@@ -505,129 +651,35 @@ export const useCoreMesh = create<CoreMeshState>()(
           (item) => item.id === (worker.runtimeOverrideId || agent?.runtimeId),
         );
         const now = Date.now();
-        const recentRuns = state.runs.filter(
-          (run) =>
-            run.workerId === id &&
-            now - new Date(run.startedAt).getTime() < 3_600_000,
-        );
-        const logs: WorkerRun['logs'] = [
-          { at: iso(), type: 'TRIGGER', detail: worker.trigger },
-        ];
-        let status: WorkerRun['status'] = 'success';
-        let decision = 'observe';
-        if (!worker.enabled) {
-          status = 'blocked';
-          decision = 'kill_switch';
-          logs.push({
-            at: iso(),
-            type: 'BLOCK',
-            detail: 'Worker kill switch is active.',
-          });
-        } else if (
-          worker.lastRunAt &&
-          now - new Date(worker.lastRunAt).getTime() <
-            worker.limits.cooldownSeconds * 1000
-        ) {
-          status = 'blocked';
-          decision = 'cooldown';
-          logs.push({
-            at: iso(),
-            type: 'LIMIT',
-            detail: `Cooldown ${worker.limits.cooldownSeconds}s`,
-          });
-        } else if (recentRuns.length >= worker.limits.maxRunsPerHour) {
-          status = 'blocked';
-          decision = 'run_budget';
-          logs.push({
-            at: iso(),
-            type: 'LIMIT',
-            detail: 'Hourly run budget exhausted.',
-          });
-        } else {
-          const latestMessage = state.messages
-            .filter((message) => worker.rooms.includes(message.roomId))
-            .at(-1);
-          logs.push({
-            at: iso(),
-            type: 'FILTER',
-            detail: latestMessage
-              ? `seq ${latestMessage.seq} · ${latestMessage.verified ? 'signed' : 'unsigned'}`
-              : 'no matching event',
-          });
-          if (
-            latestMessage &&
-            agent &&
-            state.identities.find(
-              (identity) => identity.id === agent.identityId,
-            )?.did === latestMessage.from
-          ) {
-            status = 'ignored';
-            decision = 'own_message';
-          } else if (worker.type === 'room-listener') {
-            decision = latestMessage ? 'record_event' : 'idle';
-            status = latestMessage ? 'success' : 'ignored';
-          } else if (worker.type === 'smart-responder') {
-            const relevant = Boolean(
-              latestMessage &&
-              (latestMessage.text.includes('?') ||
-                (agent &&
-                  latestMessage.text
-                    .toLowerCase()
-                    .includes(agent.name.toLowerCase()))),
-            );
-            decision = relevant
-              ? worker.approvalMode === 'autonomous'
-                ? 'reply_candidate'
-                : 'request_approval'
-              : 'irrelevant';
-            status = relevant ? 'success' : 'ignored';
-          } else if (worker.type === 'task-scout') {
-            const match = state.tasks.find(
-              (task) =>
-                task.status === 'open' &&
-                task.requiredCapabilities.some((capability) =>
-                  agent?.capabilities.includes(capability),
-                ),
-            );
-            decision = match ? `suggest_${match.id}` : 'no_task_match';
-            status = match ? 'success' : 'ignored';
-          } else if (worker.type === 'proof-verifier') {
-            decision = state.receipts.length
-              ? 'verify_latest_receipt'
-              : 'no_receipt';
-            status = state.receipts.length ? 'success' : 'ignored';
-          } else {
-            decision = `${worker.type}_ready`;
-          }
-          logs.push({ at: iso(), type: 'DECISION', detail: decision });
-          const sameDecision = recentRuns
-            .slice(-worker.loopThreshold)
-            .every((run) => run.decision === decision);
-          if (sameDecision && recentRuns.length >= worker.loopThreshold) {
-            status = 'blocked';
-            decision = 'possible_agent_loop';
-            logs.push({
-              at: iso(),
-              type: 'PAUSE',
-              detail: 'Possible reciprocal agent loop detected.',
-            });
-          }
-        }
+        const verdict = evaluateWorker({
+          worker,
+          runs: state.runs,
+          messages: state.messages,
+          agent,
+          ownDid: agent
+            ? state.identities.find(
+                (identity) => identity.id === agent.identityId,
+              )?.did
+            : undefined,
+          openTasks: state.tasks,
+          receiptCount: state.receipts.length,
+          now,
+        });
+        // Preflight runs measure their own wall time and consume no tokens.
+        // Real token, cost and latency figures are written back by the
+        // runtime execution path once a provider has answered.
         const run: WorkerRun = {
           id: randomId('run'),
           workerId: id,
           trigger: worker.trigger,
           runtime: runtime?.name || 'Identity Only',
-          startedAt: iso(),
-          durationMs: Math.floor(220 + Math.random() * 1700),
-          tokens:
-            status === 'success' && worker.type !== 'room-listener'
-              ? Math.floor(180 + Math.random() * 900)
-              : 0,
+          startedAt: verdict.startedAt,
+          durationMs: Math.max(0, Date.now() - now),
+          tokens: 0,
           cost: 0,
-          decision,
-          status,
-          logs,
+          decision: verdict.decision,
+          status: verdict.status,
+          logs: verdict.logs,
         };
         set((current) => ({
           runs: [run, ...current.runs].slice(0, 500),
@@ -636,18 +688,55 @@ export const useCoreMesh = create<CoreMeshState>()(
               ? {
                   ...item,
                   lastRunAt: run.startedAt,
-                  enabled:
-                    decision === 'possible_agent_loop' ? false : item.enabled,
+                  enabled: verdict.pause ? false : item.enabled,
                 }
               : item,
           ),
         }));
         return run;
       },
+      mergeRuns: (worker, incoming) =>
+        set((current) => {
+          const ids = new Set(current.runs.map((run) => run.id));
+          const fresh = incoming.filter((run) => !ids.has(run.id));
+          const workers = current.workers.some((item) => item.id === worker.id)
+            ? current.workers.map((item) =>
+                item.id === worker.id
+                  ? { ...item, ...worker, enabled: item.enabled }
+                  : item,
+              )
+            : [...current.workers, { ...worker, enabled: false }];
+          return {
+            workers,
+            runs: [...fresh, ...current.runs]
+              .sort((a, b) => b.startedAt.localeCompare(a.startedAt))
+              .slice(0, 500),
+          };
+        }),
       updateRun: (id, patch) =>
         set((state) => ({
           runs: state.runs.map((run) =>
             run.id === id ? { ...run, ...patch } : run,
+          ),
+        })),
+      resolveRun: (id, outcome, detail) =>
+        set((state) => ({
+          runs: state.runs.map((run) =>
+            run.id === id
+              ? {
+                  ...run,
+                  decision:
+                    outcome === 'posted' ? 'output_posted' : 'output_discarded',
+                  logs: [
+                    ...run.logs,
+                    {
+                      at: iso(),
+                      type: outcome === 'posted' ? 'POSTED' : 'DISCARDED',
+                      detail,
+                    },
+                  ],
+                }
+              : run,
           ),
         })),
       addTask: (task) => set((state) => ({ tasks: [...state.tasks, task] })),
@@ -741,7 +830,7 @@ export const useCoreMesh = create<CoreMeshState>()(
     }),
     {
       name: 'coremesh-local-v1',
-      version: 5,
+      version: 6,
       migrate: (persistedState) => {
         const persisted = persistedState as Partial<CoreMeshState>;
         const hostedKinds = new Set<Provider['kind']>([
@@ -772,24 +861,22 @@ export const useCoreMesh = create<CoreMeshState>()(
             ? providers
             : [deepSeek, ...providers],
           providerSessionSecrets: {},
+          relayAccessToken: '',
+          e2eSessions: persisted.e2eSessions || [],
+          e2eRoomKeys: {},
           messageAliases: persisted.messageAliases || {},
           protocol: {
             ...defaults.protocol,
             ...persisted.protocol,
             baseUrl: persisted.protocol?.baseUrl || defaults.protocol.baseUrl,
             connected: false,
+            status: 'connecting',
+            consecutiveFailures: 0,
             sourceLabel: 'TECHNOCORE · READY',
           },
         } as Partial<CoreMeshState>;
       },
-      partialize: (state) => ({
-        ...state,
-        hydrated: undefined,
-        unlockedKeys: {},
-        unlockedXKeys: {},
-        providerSessionSecrets: {},
-        notices: [],
-      }),
+      partialize: persistedSlice,
       onRehydrateStorage: () => (state) => state?.setHydrated(true),
     },
   ),

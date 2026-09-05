@@ -82,6 +82,15 @@ describe('CoreMesh identity removal', () => {
     });
     useCoreMesh.getState().setUnlockedKey(identity.id, new Uint8Array([1]));
     useCoreMesh.getState().setUnlockedXKey(identity.id, new Uint8Array([2]));
+    useCoreMesh.getState().upsertE2ESession({
+      id: 'e2e_session',
+      identityId: identity.id,
+      peerDid: 'did:key:z6MkPeerIdentity',
+      roomName: 'p-secretroom',
+      sealedEnvelope: 'e2e1 sealed-for-local-identity',
+      createdAt: '2026-09-01T00:00:00.000Z',
+    });
+    useCoreMesh.getState().setE2ERoomKey('e2e_session', 'session-room-key');
 
     useCoreMesh.getState().removeIdentity(identity.id);
     const state = useCoreMesh.getState();
@@ -93,6 +102,8 @@ describe('CoreMesh identity removal', () => {
     expect(state.unlockedKeys[identity.id]).toBeUndefined();
     expect(state.unlockedXKeys[identity.id]).toBeUndefined();
     expect(state.peerXKeys[identity.did]).toBeUndefined();
+    expect(state.e2eSessions).toHaveLength(0);
+    expect(state.e2eRoomKeys.e2e_session).toBeUndefined();
     expect(state.trustedDids).not.toContain(identity.did);
     expect(state.messages).toContainEqual(historicalMessage);
     expect(state.exploreMode).toBe(true);

@@ -28,6 +28,8 @@ const protocol: ProtocolConfig = {
   retentionSeconds: 604_800,
   ephemeralTtlSeconds: 900,
   connected: false,
+  status: 'connecting',
+  consecutiveFailures: 0,
   sourceLabel: 'TECHNOCORE · READY',
 };
 
@@ -41,6 +43,18 @@ const requestUrl = (input: RequestInfo | URL) =>
 afterEach(() => vi.unstubAllGlobals());
 
 describe('Technocore HTTP adapter', () => {
+  it('checks the lightweight health endpoint without loading room data', async () => {
+    const fetchMock = vi.fn<typeof fetch>(async () => new Response('ok'));
+    vi.stubGlobal('fetch', fetchMock);
+
+    const latency = await new HttpTechnocoreAdapter(protocol).checkHealth();
+
+    expect(latency).toBeGreaterThanOrEqual(0);
+    expect(requestUrl(fetchMock.mock.calls[0][0])).toBe(
+      'https://technocore.chat/healthz',
+    );
+  });
+
   it('parses the official text room listing and composite room classes', async () => {
     vi.stubGlobal(
       'fetch',
@@ -100,6 +114,46 @@ describe('Technocore HTTP adapter', () => {
       nonce,
       verified: true,
     });
+  });
+
+  it('exposes room generation and retained-history gaps', async () => {
+    vi.stubGlobal(
+      'fetch',
+      vi.fn(
+        async () =>
+          new Response(
+            JSON.stringify({
+              room: 'research',
+              count: 1,
+              first_seq: 15,
+              last_seq: 15,
+              generation: 3,
+              messages: [
+                {
+                  seq: 15,
+                  ts: '2026-09-02T12:00:00.000000Z',
+                  from: 'observer',
+                  text: 'retained record',
+                },
+              ],
+            }),
+            { headers: { 'content-type': 'application/json' } },
+          ),
+      ),
+    );
+
+    const window = await new HttpTechnocoreAdapter(protocol).readRoomState(
+      'research',
+      '10',
+    );
+
+    expect(window).toMatchObject({
+      firstSeq: '15',
+      lastSeq: '15',
+      generation: '3',
+      gapDetected: true,
+    });
+    expect(window.messages).toHaveLength(1);
   });
 
   it('loads only new records through the bounded long-poll lane', async () => {
@@ -182,6 +236,87 @@ describe('Technocore HTTP adapter', () => {
     expect(requestUrl(url)).toContain('?format=json');
     expect(init?.method).toBeUndefined();
     expect(received[0]).toMatchObject({ seq: '72', verified: true });
+  });
+
+  it('falls back to the official POST lane for long signed messages', async () => {
+    const secretKey = new Uint8Array(32).fill(29);
+    const did = didFromPublicKey(ed25519.getPublicKey(secretKey));
+    const nonce = '1788200000001';
+    const messageText = '世'.repeat(2_000);
+    const signed = signTechnocoreMessage(
+      'research',
+      nonce,
+      messageText,
+      secretKey,
+    );
+    const fetchMock = vi.fn(
+      async (..._args: [RequestInfo | URL, RequestInit?]) =>
+        new Response(
+          JSON.stringify({
+            room: 'research',
+            count: 0,
+            first_seq: null,
+            last_seq: 0,
+            generation: 1,
+            messages: [],
+          }),
+          { headers: { 'content-type': 'application/json' } },
+        ),
+    );
+    vi.stubGlobal('fetch', fetchMock);
+
+    await new HttpTechnocoreAdapter(protocol).sendSignedMessage('research', {
+      id: 'local_long',
+      roomId: 'tc_research',
+      from: did,
+      text: signed.text,
+      createdAt: '2026-08-31T20:00:00.000Z',
+      seq: nonce,
+      nonce,
+      signature: signed.signature,
+      verified: true,
+    });
+
+    const [url, init] = fetchMock.mock.calls[0];
+    expect(requestUrl(url)).toBe(
+      'https://technocore.chat/r/research?format=json',
+    );
+    expect(init?.method).toBe('POST');
+    expect(new Headers(init?.headers).get('content-type')).toBe(
+      'application/json',
+    );
+    expect(
+      JSON.parse(typeof init?.body === 'string' ? init.body : ''),
+    ).toMatchObject({
+      did,
+      sig: signed.signature,
+      nonce,
+      text: messageText,
+    });
+  });
+
+  it('falls back to the official POST lane for long note values', async () => {
+    const fetchMock = vi.fn(
+      async (..._args: [RequestInfo | URL, RequestInit?]) =>
+        new Response('ok', { headers: { 'content-type': 'text/plain' } }),
+    );
+    vi.stubGlobal('fetch', fetchMock);
+    const value = '世'.repeat(2_000);
+
+    await new HttpTechnocoreAdapter(protocol).setNote(
+      'profiles',
+      'long-note',
+      value,
+    );
+
+    const [url, init] = fetchMock.mock.calls[0];
+    expect(requestUrl(url)).toBe(
+      'https://technocore.chat/kv/profiles/long-note',
+    );
+    expect(init?.method).toBe('POST');
+    expect(JSON.parse(typeof init?.body === 'string' ? init.body : '')).toEqual(
+      { value },
+    );
   });
 
   it('maps live service limits instead of hard-coding them', async () => {

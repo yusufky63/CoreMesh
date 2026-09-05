@@ -15,14 +15,12 @@ import {
   Filter,
   KeyRound,
   LockKeyhole,
-  MessageSquare,
   Plus,
   Radio,
   RefreshCw,
   Search,
   Send,
   ShieldCheck,
-  Sparkles,
   Users,
 } from 'lucide-react';
 import {
@@ -33,8 +31,12 @@ import {
 } from '@/lib/crypto';
 import type { ProtocolMessage, Room, RoomKind } from '@/lib/domain';
 import { roomKindLabel } from '@/lib/domain';
-import { HttpTechnocoreAdapter } from '@/lib/adapters';
+import {
+  HttpTechnocoreAdapter,
+  type TechnocoreRoomWindow,
+} from '@/lib/adapters';
 import { useCoreMesh } from '@/lib/store';
+import { coreMeshPath } from '@/lib/routes';
 import {
   CoreButton,
   CoreInput,
@@ -50,7 +52,6 @@ import {
   shortDid,
 } from '../common';
 import { QuickUnlockModal } from '../quick-unlock-modal';
-import { KineticMessageConstellation } from '../effects/kinetic-message-constellation';
 
 function nextTechnocoreNonce(
   messages: ProtocolMessage[],
@@ -103,19 +104,34 @@ export function PulseSurface() {
   const [showChecklist, setShowChecklist] = useState(true);
   const navigateTo = (view: string, selectedId?: string) => {
     setView(view, selectedId);
-    const path = `/${view}`;
+    const path = coreMeshPath(view, selectedId);
     if (window.location.pathname !== path)
       window.history.pushState({ view, selectedId }, '', path);
   };
 
   const hasIdentity = identities.length > 0;
   const isUnlocked = identities.some((id) => Boolean(unlockedKeys[id.id]));
-  const hasProvider = providers.length > 0;
-  const hasRuntime =
-    runtimes.some((r) => r.status === 'connected') || runtimes.length > 0;
+  const connectedProvider = providers.find((provider) => provider.connected);
+  const connectedRuntime = runtimes.find(
+    (runtime) => runtime.status === 'connected',
+  );
+  const hasProvider = Boolean(connectedProvider);
+  const hasRuntime = Boolean(connectedRuntime);
   const hasAgent = agents.length > 0;
   const hasActiveWorker = workers.some((w) => w.enabled);
   const hasTasksOrReceipts = tasks.length > 0 || receipts.length > 0;
+  const controlledDids = useMemo(() => {
+    const dids = new Set(identities.map((identity) => identity.did));
+    agents.forEach((agent) => {
+      const identity = identities.find((item) => item.id === agent.identityId);
+      if (identity) dids.add(identity.did);
+    });
+    return dids;
+  }, [agents, identities]);
+  const controlledMessages = useMemo(
+    () => messages.filter((message) => controlledDids.has(message.from)),
+    [controlledDids, messages],
+  );
 
   const steps = [
     {
@@ -147,15 +163,21 @@ export function PulseSurface() {
       step: '02',
       title: 'AI PROVIDER & RUNTIME',
       icon: Boxes,
-      done: hasProvider || hasRuntime,
-      warn: false,
-      badge: hasProvider
-        ? `${providers[0]?.name || 'PROVIDER'} READY`
-        : 'NEEDS CONFIG',
-      desc: hasProvider
-        ? `${providers[0]?.name} runtime configured. API keys remain session-only.`
-        : 'Connect DeepSeek V4, Claude, or local Ollama. Intelligence is separate from identity.',
-      action: hasProvider ? 'VIEW RUNTIMES' : 'CONNECT DEEPSEEK',
+      done: hasProvider && hasRuntime,
+      warn: providers.length > 0 || runtimes.length > 0,
+      badge:
+        hasProvider && hasRuntime
+          ? `${connectedProvider?.name || 'PROVIDER'} READY`
+          : providers.length || runtimes.length
+            ? 'NOT TESTED'
+            : 'NEEDS CONFIG',
+      desc:
+        hasProvider && hasRuntime
+          ? `${connectedRuntime?.name || connectedProvider?.name} is connected and health-tested.`
+          : providers.length || runtimes.length
+            ? 'Provider templates exist, but no provider and runtime pair has passed a connection test.'
+            : 'Connect DeepSeek, Claude, or local Ollama. Intelligence is separate from identity.',
+      action: hasProvider && hasRuntime ? 'VIEW RUNTIMES' : 'TEST PROVIDER',
       view: 'providers',
     },
     {
@@ -169,8 +191,12 @@ export function PulseSurface() {
       desc: hasAgent
         ? `${agents[0]?.name} attached to runtime. Ready for bounded roles.`
         : 'Define an agent persona, capabilities, and bind it to your cryptographic identity.',
-      action: hasAgent ? 'VIEW AGENTS' : 'CREATE AGENT',
-      view: 'agents',
+      action: hasAgent
+        ? 'VIEW AGENTS'
+        : hasIdentity
+          ? 'CREATE AGENT'
+          : 'CREATE IDENTITY FIRST',
+      view: hasAgent || hasIdentity ? 'agents' : 'vault',
     },
     {
       id: 'worker',
@@ -195,7 +221,7 @@ export function PulseSurface() {
       step: '05',
       title: 'COORDINATION & PROOFS',
       icon: ShieldCheck,
-      done: hasTasksOrReceipts || messages.length > 0,
+      done: hasTasksOrReceipts || controlledMessages.length > 0,
       warn: false,
       badge:
         receipts.length > 0
@@ -217,7 +243,7 @@ export function PulseSurface() {
   const events = useMemo(
     () =>
       [
-        ...messages.slice(-6).map((message) => ({
+        ...controlledMessages.slice(-6).map((message) => ({
           at: message.createdAt,
           type: 'MESSAGE' as const,
           targetView: 'rooms',
@@ -250,7 +276,7 @@ export function PulseSurface() {
           verified: true,
         })),
       ].sort((a, b) => +new Date(b.at) - +new Date(a.at)),
-    [messages, tasks, runs, receipts, rooms],
+    [controlledMessages, tasks, runs, receipts, rooms],
   );
 
   const [pulsePage, setPulsePage] = useState(1);
@@ -261,10 +287,10 @@ export function PulseSurface() {
     pulsePage * EVENTS_PER_PAGE,
   );
 
-  const signedPercent = messages.length
+  const signedPercent = controlledMessages.length
     ? Math.round(
-        (messages.filter((message) => message.verified).length /
-          messages.length) *
+        (controlledMessages.filter((message) => message.verified).length /
+          controlledMessages.length) *
           100,
       )
     : 0;
@@ -273,7 +299,7 @@ export function PulseSurface() {
       <SectionHeader
         index="01"
         title={'PULSE\nLIVE'}
-        subtitle="Useful protocol activity, worker decisions and verified outcomes."
+        subtitle="Your identities, controlled agents, worker decisions and verified outcomes."
         action={
           <span
             className={`source-chip ${protocol.connected ? 'connected' : ''}`}
@@ -288,7 +314,7 @@ export function PulseSurface() {
           ['SOURCE', protocol.sourceLabel, protocol.connected ? 'ok' : 'warn'],
           ['AGENTS', String(agents.length), 'plain'],
           ['ROOMS', String(rooms.length), 'plain'],
-          ['SIG', `${signedPercent}%`, signedPercent ? 'ok' : 'plain'],
+          ['OWN SIG', `${signedPercent}%`, signedPercent ? 'ok' : 'plain'],
           [
             'WORKERS',
             `${workers.filter((worker) => worker.enabled).length}/${workers.length}`,
@@ -397,8 +423,8 @@ export function PulseSurface() {
             ))
           ) : (
             <EmptyState
-              title="NO PROTOCOL EVENTS"
-              body="Connect a protocol endpoint or start in the local lab."
+              title="NO CONTROLLED ACTIVITY"
+              body="Messages from public rooms stay in Rooms. Your own and agent-authored messages will appear here."
             />
           )}
           <Pagination
@@ -480,6 +506,7 @@ export function RoomsSurface() {
   const [newRoomCutoff] = useState(() => new Date().getTime() - 7 * 86_400_000);
   const feedRef = useRef<HTMLDivElement>(null);
   const isNearBottomRef = useRef(true);
+  const roomGenerationsRef = useRef<Record<string, string>>({});
   const selectedRoom = state.rooms.find((room) => room.id === selectedRoomId);
   const filtered = state.rooms.filter(
     (room) =>
@@ -515,10 +542,6 @@ export function RoomsSurface() {
     roomPage * ROOMS_PER_PAGE,
   );
 
-  const [roomViewMode, setRoomViewMode] = useState<'timeline' | 'kinetic'>(
-    'timeline',
-  );
-
   const roomMessages = selectedRoom
     ? state.messages.filter(
         (message) =>
@@ -531,6 +554,40 @@ export function RoomsSurface() {
   const unlockedKey = activeIdentity
     ? state.unlockedKeys[activeIdentity.id]
     : undefined;
+
+  const applyRoomWindow = useCallback(
+    (room: Room, window: TechnocoreRoomWindow) => {
+      const previousGeneration = roomGenerationsRef.current[room.id];
+      const generationChanged = Boolean(
+        previousGeneration &&
+        window.generation &&
+        previousGeneration !== window.generation,
+      );
+      if (window.generation)
+        roomGenerationsRef.current[room.id] = window.generation;
+      if (generationChanged) {
+        useCoreMesh
+          .getState()
+          .replaceProtocolMessages(room.id, window.messages);
+        useCoreMesh
+          .getState()
+          .notify(
+            `${room.name} was recreated on Technocore. The local timeline was reset to its new generation.`,
+            'info',
+          );
+      } else {
+        useCoreMesh.getState().mergeProtocolMessages(room.id, window.messages);
+      }
+      if (window.gapDetected)
+        useCoreMesh
+          .getState()
+          .notify(
+            `${room.name} history gap detected before sequence ${window.firstSeq}. Older records are no longer retained by Technocore.`,
+            'info',
+          );
+    },
+    [],
+  );
 
   const scrollToLatest = useCallback((behavior: ScrollBehavior = 'smooth') => {
     const feed = feedRef.current;
@@ -584,15 +641,17 @@ export function RoomsSurface() {
         try {
           setLiveFeedState(initial ? 'loading' : 'live');
           const since = latestSequence();
-          const incoming = initial
-            ? await adapter.readRoom(liveRoom.name)
-            : await adapter.waitForRoom(
+          const roomWindow = initial
+            ? await adapter.readRoomState(liveRoom.name)
+            : await adapter.waitForRoomState(
                 liveRoom.name,
                 since,
                 currentState.protocol.maxWaitSeconds,
               );
+          const incoming = roomWindow.messages;
           if (cancelled) return;
           initial = false;
+          applyRoomWindow(liveRoom, roomWindow);
           if (incoming.length) {
             const knownIds = new Set(
               useCoreMesh.getState().messages.map((message) => message.id),
@@ -600,7 +659,6 @@ export function RoomsSurface() {
             const freshCount = incoming.filter(
               (message) => !knownIds.has(message.id),
             ).length;
-            useCoreMesh.getState().mergeProtocolMessages(liveRoom.id, incoming);
             requestAnimationFrame(() => {
               if (isNearBottomRef.current) scrollToLatest();
               else if (freshCount)
@@ -624,6 +682,7 @@ export function RoomsSurface() {
       cancelled = true;
     };
   }, [
+    applyRoomWindow,
     scrollToLatest,
     selectedRoomId,
     state.protocol.baseUrl,
@@ -640,10 +699,10 @@ export function RoomsSurface() {
     }
     setRoomLoading(true);
     try {
-      const messages = await new HttpTechnocoreAdapter(state.protocol).readRoom(
-        room.name,
-      );
-      state.mergeProtocolMessages(room.id, messages);
+      const roomWindow = await new HttpTechnocoreAdapter(
+        state.protocol,
+      ).readRoomState(room.name);
+      applyRoomWindow(room, roomWindow);
       requestAnimationFrame(() => scrollToLatest());
     } catch (error) {
       state.notify(
@@ -810,10 +869,18 @@ export function RoomsSurface() {
     setSyncing(true);
     try {
       const adapter = new HttpTechnocoreAdapter(state.protocol);
-      const config = await adapter.getConfig();
       const rooms = await adapter.listRooms();
       rooms.forEach(state.addRoom);
-      state.setProtocol(config);
+      try {
+        state.setProtocol(await adapter.getConfig());
+      } catch {
+        // /config and /.well-known/agent.json may be served without CORS
+        // headers by the edge cache; the room directory itself succeeded.
+        state.notify(
+          'Room directory loaded. Protocol settings could not be refreshed from this browser origin, so the last known values are kept.',
+          'info',
+        );
+      }
       state.notify(`${rooms.length} protocol rooms loaded.`, 'success');
     } catch (error) {
       state.setProtocol({ connected: false });
@@ -875,24 +942,6 @@ export function RoomsSurface() {
           subtitle={selectedRoom.topic}
           action={
             <div className="action-row">
-              <div className="room-mode-toggle">
-                <button
-                  type="button"
-                  className={`room-mode-btn ${roomViewMode === 'timeline' ? 'active' : ''}`}
-                  onClick={() => setRoomViewMode('timeline')}
-                >
-                  <MessageSquare size={11} />
-                  TIMELINE
-                </button>
-                <button
-                  type="button"
-                  className={`room-mode-btn ${roomViewMode === 'kinetic' ? 'active' : ''}`}
-                  onClick={() => setRoomViewMode('kinetic')}
-                >
-                  <Sparkles size={11} />
-                  ORBITAL STREAM
-                </button>
-              </div>
               <CoreButton
                 variant="outline"
                 onClick={() => setSelectedRoomId('')}
@@ -950,93 +999,79 @@ export function RoomsSurface() {
           </div>
         )}
 
-        {/* ── Dual Message View: Kinetic Orbital Stream or Classic Timeline ── */}
-        {roomViewMode === 'kinetic' ? (
-          <KineticMessageConstellation
-            messages={visibleRoomMessages}
-            onReply={(msg) => {
-              setMessageText((prev) =>
-                prev
-                  ? `${prev} @${shortDid(msg.from)} `
-                  : `@${shortDid(msg.from)} `,
-              );
-            }}
-          />
-        ) : (
-          <div className="room-message-stream">
-            <div className="room-feed-status" aria-live="polite">
-              <span>
-                {selectedRoom.source === 'technocore'
-                  ? liveFeedState === 'retrying'
-                    ? 'RECONNECTING · 5S'
-                    : liveFeedState === 'loading'
-                      ? 'LOADING LATEST 50'
-                      : 'LIVE · LONG POLL 10S'
-                  : 'LOCAL ROOM'}
-              </span>
-              <span>
-                SHOWING {visibleRoomMessages.length}
-                {roomMessages.length > visibleRoomMessages.length
-                  ? ` / ${roomMessages.length}`
-                  : ''}
-              </span>
-            </div>
-            <div
-              className="message-feed room-message-feed"
-              ref={feedRef}
-              onScroll={(event) => {
-                const feed = event.currentTarget;
-                const nearBottom =
-                  feed.scrollHeight - feed.scrollTop - feed.clientHeight < 96;
-                isNearBottomRef.current = nearBottom;
-                if (nearBottom && newMessageCount) setNewMessageCount(0);
-              }}
-            >
-              {!visibleRoomMessages.length && (
-                <div className="room-feed-empty">
-                  {roomLoading || liveFeedState === 'loading'
-                    ? 'READING ROOM…'
-                    : 'NO MESSAGES YET · START THE THREAD'}
-                </div>
-              )}
-              {visibleRoomMessages.map((message) => (
-                <article className="message-entry" key={message.id}>
-                  <div className="message-glyph-wrap">
-                    <Glyph did={message.from} size={5} />
-                  </div>
-                  <div>
-                    <header>
-                      <strong>{shortDid(message.from)}</strong>
-                      {message.verified ? (
-                        <span className="signed">
-                          <ShieldCheck size={11} />
-                          SIGNED
-                        </span>
-                      ) : (
-                        <span>UNSIGNED</span>
-                      )}
-                      <time>{formatTime(message.createdAt)}</time>
-                    </header>
-                    <p>{message.text}</p>
-                    <small>
-                      SEQ {message.seq} · NONCE {message.nonce.slice(0, 12)}
-                    </small>
-                  </div>
-                </article>
-              ))}
-            </div>
-            {newMessageCount > 0 && (
-              <button
-                className="new-message-jump"
-                type="button"
-                onClick={() => scrollToLatest()}
-              >
-                <ArrowDown size={13} />
-                {newMessageCount} NEW MESSAGE{newMessageCount === 1 ? '' : 'S'}
-              </button>
-            )}
+        <div className="room-message-stream">
+          <div className="room-feed-status" aria-live="polite">
+            <span>
+              {selectedRoom.source === 'technocore'
+                ? liveFeedState === 'retrying'
+                  ? 'RECONNECTING · 5S'
+                  : liveFeedState === 'loading'
+                    ? 'LOADING LATEST 50'
+                    : 'LIVE · LONG POLL 10S'
+                : 'LOCAL ROOM'}
+            </span>
+            <span>
+              SHOWING {visibleRoomMessages.length}
+              {roomMessages.length > visibleRoomMessages.length
+                ? ` / ${roomMessages.length}`
+                : ''}
+            </span>
           </div>
-        )}
+          <div
+            className="message-feed room-message-feed"
+            ref={feedRef}
+            onScroll={(event) => {
+              const feed = event.currentTarget;
+              const nearBottom =
+                feed.scrollHeight - feed.scrollTop - feed.clientHeight < 96;
+              isNearBottomRef.current = nearBottom;
+              if (nearBottom && newMessageCount) setNewMessageCount(0);
+            }}
+          >
+            {!visibleRoomMessages.length && (
+              <div className="room-feed-empty">
+                {roomLoading || liveFeedState === 'loading'
+                  ? 'READING ROOM…'
+                  : 'NO MESSAGES YET · START THE THREAD'}
+              </div>
+            )}
+            {visibleRoomMessages.map((message) => (
+              <article className="message-entry" key={message.id}>
+                <div className="message-glyph-wrap">
+                  <Glyph did={message.from} size={5} />
+                </div>
+                <div>
+                  <header>
+                    <strong>{shortDid(message.from)}</strong>
+                    {message.verified ? (
+                      <span className="signed">
+                        <ShieldCheck size={11} />
+                        SIGNED
+                      </span>
+                    ) : (
+                      <span>UNSIGNED</span>
+                    )}
+                    <time>{formatTime(message.createdAt)}</time>
+                  </header>
+                  <p>{message.text}</p>
+                  <small>
+                    SEQ {message.seq} · NONCE {message.nonce.slice(0, 12)}
+                  </small>
+                </div>
+              </article>
+            ))}
+          </div>
+          {newMessageCount > 0 && (
+            <button
+              className="new-message-jump"
+              type="button"
+              onClick={() => scrollToLatest()}
+            >
+              <ArrowDown size={13} />
+              {newMessageCount} NEW MESSAGE{newMessageCount === 1 ? '' : 'S'}
+            </button>
+          )}
+        </div>
         <div className="composer">
           <CoreTextarea
             value={messageText}

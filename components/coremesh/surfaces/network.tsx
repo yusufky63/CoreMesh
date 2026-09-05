@@ -4,6 +4,7 @@ import { useEffect, useMemo, useRef, useState } from 'react';
 import cytoscape, { type ElementDefinition } from 'cytoscape';
 import { Maximize2, Network, Table2 } from 'lucide-react';
 import { useCoreMesh } from '@/lib/store';
+import { coreMeshPath } from '@/lib/routes';
 import {
   CoreButton,
   EmptyState,
@@ -19,11 +20,11 @@ export function NetworkSurface() {
   const cyRef = useRef<cytoscape.Core | null>(null);
   const [mode, setMode] = useState<'map' | 'table'>('map');
   const [windowSize, setWindowSize] = useState('5m');
+  const [mapReferenceTime, setMapReferenceTime] = useState(() => Date.now());
   const [selectedNode, setSelectedNode] = useState<{
     id: string;
     label: string;
     kind: string;
-    glyph: string;
     targetView?: string;
     targetId?: string;
     did?: string;
@@ -32,9 +33,54 @@ export function NetworkSurface() {
     status?: string;
   } | null>(null);
 
+  const mappedRooms = useMemo(() => {
+    const minutes = Number.parseInt(windowSize, 10) || 5;
+    const cutoff = mapReferenceTime - minutes * 60_000;
+    const recentRoomIds = new Set(
+      state.messages
+        .filter((message) => new Date(message.createdAt).getTime() >= cutoff)
+        .map((message) => message.roomId),
+    );
+    const workerRoomIds = new Set(
+      state.workers.flatMap((worker) => worker.rooms),
+    );
+    const taskRooms = new Set(
+      state.tasks.map((task) => task.room).filter(Boolean),
+    );
+    return state.rooms
+      .filter(
+        (room) =>
+          room.source === 'local' ||
+          room.bookmarked ||
+          Boolean(room.ownerDid) ||
+          recentRoomIds.has(room.id) ||
+          workerRoomIds.has(room.id) ||
+          taskRooms.has(room.id) ||
+          taskRooms.has(room.name),
+      )
+      .sort((a, b) => b.messageCount - a.messageCount)
+      .slice(0, 24);
+  }, [
+    state.messages,
+    state.rooms,
+    state.tasks,
+    state.workers,
+    mapReferenceTime,
+    windowSize,
+  ]);
+
+  useEffect(() => {
+    const timer = window.setInterval(
+      () => setMapReferenceTime(Date.now()),
+      30_000,
+    );
+    return () => window.clearInterval(timer);
+  }, []);
+
   const elements = useMemo<ElementDefinition[]>(() => {
     const nodes: ElementDefinition[] = [];
     const edges: ElementDefinition[] = [];
+    const mappedRoomIds = new Set(mappedRooms.map((room) => room.id));
 
     // 1. AGENTS: Left Cluster
     state.agents.forEach((agent, index) => {
@@ -48,7 +94,6 @@ export function NetworkSurface() {
           id: agent.id,
           label: agent.name.toUpperCase(),
           kind: 'AGENT',
-          glyph: '▦',
           signed: true,
           did: identity.did,
           targetView: 'agents',
@@ -57,7 +102,7 @@ export function NetworkSurface() {
       });
 
       // Connect agent to rooms it participates in
-      state.rooms
+      mappedRooms
         .filter(
           (room) =>
             state.workers.some(
@@ -97,7 +142,6 @@ export function NetworkSurface() {
           id: worker.id,
           label: worker.name.toUpperCase(),
           kind: 'WORKER',
-          glyph: '▥',
           enabled: worker.enabled,
           targetView: 'workers',
         },
@@ -113,7 +157,8 @@ export function NetworkSurface() {
         },
       });
 
-      worker.rooms.forEach((room) =>
+      worker.rooms.forEach((room) => {
+        if (!mappedRoomIds.has(room)) return;
         edges.push({
           data: {
             id: `edge_${worker.id}_${room}`,
@@ -122,25 +167,25 @@ export function NetworkSurface() {
             label: 'listens',
             dotted: true,
           },
-        }),
-      );
+        });
+      });
     });
 
     // 3. ROOMS: Central Communication Nexus
-    state.rooms.forEach((room, index) => {
-      const yPos = 80 + index * 100;
+    mappedRooms.forEach((room, index) => {
+      const column = index % 3;
+      const row = Math.floor(index / 3);
       nodes.push({
         data: {
           id: room.id,
           label: room.name.toUpperCase(),
           kind: 'ROOM',
-          glyph: '□',
           private: room.kind.includes('private'),
           ephemeral: room.kind.includes('ephemeral'),
           messageCount: room.messageCount,
           targetView: 'rooms',
         },
-        position: { x: 580, y: yPos },
+        position: { x: 520 + column * 170, y: 80 + row * 90 },
       });
     });
 
@@ -152,11 +197,10 @@ export function NetworkSurface() {
           id: task.id,
           label: task.title.toUpperCase(),
           kind: 'TASK',
-          glyph: '▭',
           status: task.status,
           targetView: 'tasks',
         },
-        position: { x: 820, y: yPos },
+        position: { x: 1060, y: yPos },
       });
 
       if (task.assignedAgentDid) {
@@ -192,12 +236,11 @@ export function NetworkSurface() {
           id,
           label: `PROOF ${receipt.taskId.slice(-4)}`,
           kind: 'PROOF',
-          glyph: '◇',
-          verified: true,
+          verified: false,
           targetView: 'proofs',
           targetId: receipt.taskId,
         },
-        position: { x: 1040, y: taskY },
+        position: { x: 1260, y: taskY },
       });
 
       edges.push({
@@ -215,7 +258,7 @@ export function NetworkSurface() {
   }, [
     state.agents,
     state.identities,
-    state.rooms,
+    mappedRooms,
     state.workers,
     state.messages,
     state.tasks,
@@ -362,7 +405,6 @@ export function NetworkSurface() {
         id: node.id(),
         label: String(data.label || ''),
         kind: String(data.kind || ''),
-        glyph: String(data.glyph || ''),
         targetView: data.targetView ? String(data.targetView) : undefined,
         targetId: data.targetId ? String(data.targetId) : data.id,
         did: data.did ? String(data.did) : undefined,
@@ -449,7 +491,9 @@ export function NetworkSurface() {
         ]}
       />
       <div className="map-toolbar">
-        <span>LIVE FLOW</span>
+        <span>
+          LIVE FLOW · {mappedRooms.length}/{state.rooms.length} ROOMS
+        </span>
         {['1m', '5m', '15m'].map((value) => (
           <button
             className={windowSize === value ? 'active' : ''}
@@ -477,9 +521,6 @@ export function NetworkSurface() {
           {selectedNode && mode === 'map' && (
             <div className="map-node-inspector">
               <div className="node-inspector-head">
-                <span className="node-inspector-glyph">
-                  {selectedNode.glyph}
-                </span>
                 <div className="node-inspector-titles">
                   <strong>{selectedNode.label}</strong>
                   <span className="node-kind-tag">{selectedNode.kind}</span>
@@ -521,8 +562,8 @@ export function NetworkSurface() {
                 )}
                 {selectedNode.kind === 'PROOF' && (
                   <p>
-                    Cryptographic Work Receipt · SHA-256 + Ed25519 signature
-                    verified.
+                    Cryptographic Work Receipt recorded. Open Proofs to verify
+                    its SHA-256 and Ed25519 evidence.
                   </p>
                 )}
                 <div className="node-inspector-actions">
@@ -533,7 +574,10 @@ export function NetworkSurface() {
                           selectedNode.targetView,
                           selectedNode.targetId,
                         );
-                        const path = `/${selectedNode.targetView}`;
+                        const path = coreMeshPath(
+                          selectedNode.targetView,
+                          selectedNode.targetId,
+                        );
                         if (window.location.pathname !== path)
                           window.history.pushState(
                             {
@@ -578,17 +622,9 @@ export function NetworkSurface() {
               </div>
               {paginatedNodes.map((node) => (
                 <div className="matrix-row" key={node.data.id}>
-                  <span>
-                    {node.data.glyph} {node.data.label}
-                  </span>
+                  <span>{node.data.label}</span>
                   <span>{node.data.kind}</span>
-                  <span>
-                    {node.data.verified
-                      ? 'VERIFIED'
-                      : node.data.enabled
-                        ? 'LIVE'
-                        : 'OBSERVED'}
-                  </span>
+                  <span>{node.data.enabled ? 'LIVE' : 'OBSERVED'}</span>
                   <span>
                     {
                       elements.filter(

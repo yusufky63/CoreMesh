@@ -12,10 +12,15 @@
     "lint": "oxlint",
     "format": "oxfmt",
     "test": "vitest run --config vitest.config.ts",
-    "check": "npm run lint && tsc --noEmit && npm test && npm run build"
+    "worker:build": "esbuild scripts/coremesh-worker.ts --bundle --platform=node --target=node22 --format=esm --outfile=dist/worker/coremesh-worker.mjs --banner:js=\"import { createRequire } from 'node:module'; const require = createRequire(import.meta.url);\"",
+    "worker": "npm run worker:build && node dist/worker/coremesh-worker.mjs",
+    "mcp:build": "esbuild scripts/coremesh-mcp.ts --bundle --platform=node --target=node22 --format=esm --outfile=dist/worker/coremesh-mcp.mjs --banner:js=\"import { createRequire } from 'node:module'; const require = createRequire(import.meta.url);\"",
+    "mcp": "npm run mcp:build && node dist/worker/coremesh-mcp.mjs",
+    "check": "npm run lint && tsc --noEmit && npm test && npm run build && npm run worker:build && npm run mcp:build"
   },
   "dependencies": {
     "@base-ui/react": "1.7.0",
+    "@modelcontextprotocol/sdk": "^1.30.0",
     "@noble/curves": "^2.4.0",
     "@noble/hashes": "^2.4.0",
     "@shadcn/react": "0.3.0",

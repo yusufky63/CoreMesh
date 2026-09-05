@@ -1,3 +1,10 @@
+import {
+  TokenBucket,
+  clientKey,
+  decideRelayAccess,
+} from '@/lib/relay-auth';
+import { getServerSecret } from '@/lib/server-env';
+
 type HostedProviderKind =
   | 'openai-compatible'
   | 'anthropic'
@@ -48,62 +55,95 @@ const providers: Record<
   },
 };
 
-function resolveRequest(request: Request, kind: string) {
-  const provider = providers[kind as HostedProviderKind];
-  const path = new URL(request.url).searchParams.get('path') || '';
-  if (!provider || !provider.paths.includes(path)) return null;
-  const suppliedKey =
-    request.headers.get('authorization')?.replace(/^Bearer\s+/iu, '') ||
-    request.headers.get('x-api-key');
-  const key = suppliedKey || getServerSecret(provider.envKey);
-  return { provider, path, key };
+const MAX_BODY_BYTES = 2_000_000;
+const UPSTREAM_TIMEOUT_MS = 120_000;
+const noStore = { 'cache-control': 'no-store', 'x-content-type-options': 'nosniff' };
+
+const relayRpm = Number(getServerSecret('COREMESH_RELAY_RPM')) || 60;
+const bucket = new TokenBucket(relayRpm, relayRpm / 60_000);
+
+function deny(status: number, error: string, extra: Record<string, string> = {}) {
+  return Response.json(
+    { error },
+    { status, headers: { ...noStore, ...extra } },
+  );
 }
 
 async function relay(request: Request, kind: string) {
-  const resolved = resolveRequest(request, kind);
-  if (!resolved)
-    return Response.json(
-      { error: 'Unsupported provider route.' },
-      { status: 404, headers: { 'cache-control': 'no-store' } },
-    );
-  if (!resolved.key)
-    return Response.json(
-      { error: 'This provider is not configured for this deployment.' },
-      { status: 401, headers: { 'cache-control': 'no-store' } },
-    );
-  const isAnthropic = kind === 'anthropic';
-  const headers: Record<string, string> = isAnthropic
-    ? {
-        'x-api-key': resolved.key,
-        'anthropic-version': '2023-06-01',
-        'content-type': 'application/json',
-      }
-    : {
-        authorization: `Bearer ${resolved.key}`,
-        'content-type': 'application/json',
-      };
+  const provider = providers[kind as HostedProviderKind];
+  const path = (new URL(request.url).searchParams.get('path') || '')
+    .trim()
+    .replace(/^\/+/u, '');
+  if (!provider || !provider.paths.includes(path))
+    return deny(404, 'Unsupported provider route.');
+
+  const suppliedKey =
+    request.headers.get('authorization')?.replace(/^Bearer\s+/iu, '') ||
+    request.headers.get('x-api-key') ||
+    null;
+  const decision = decideRelayAccess({
+    suppliedKey,
+    relayToken: request.headers.get('x-coremesh-relay'),
+    configuredToken: getServerSecret('COREMESH_RELAY_TOKEN') || null,
+    openRelay: getServerSecret('COREMESH_RELAY_OPEN') === '1',
+    secFetchSite: request.headers.get('sec-fetch-site'),
+    origin: request.headers.get('origin'),
+    host: request.headers.get('host'),
+  });
+  if (!decision.ok) return deny(decision.status, decision.error);
+
+  const limit = bucket.take(
+    `${clientKey(request.headers)}:${decision.mode}`,
+    Date.now(),
+  );
+  if (!limit.ok)
+    return deny(429, 'Relay rate limit exceeded.', {
+      'retry-after': String(limit.retryAfterSeconds),
+    });
+
+  const key = suppliedKey || getServerSecret(provider.envKey);
+  if (!key) return deny(401, 'This provider is not configured for this deployment.');
+
   const body = request.method === 'POST' ? await request.text() : undefined;
-  if (body && body.length > 2_000_000)
-    return Response.json(
-      { error: 'Request is too large.' },
-      { status: 413, headers: { 'cache-control': 'no-store' } },
-    );
-  const response = await fetch(
-    `${resolved.provider.baseUrl}/${resolved.path}`,
-    {
+  if (body && new TextEncoder().encode(body).length > MAX_BODY_BYTES)
+    return deny(413, 'Request is too large.');
+
+  const headers: Record<string, string> =
+    kind === 'anthropic'
+      ? {
+          'x-api-key': key,
+          'anthropic-version': '2023-06-01',
+          'content-type': 'application/json',
+        }
+      : { authorization: `Bearer ${key}`, 'content-type': 'application/json' };
+
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(), UPSTREAM_TIMEOUT_MS);
+  try {
+    const response = await fetch(`${provider.baseUrl}/${path}`, {
       method: request.method,
       headers,
       body,
-    },
-  );
-  return new Response(response.body, {
-    status: response.status,
-    headers: {
-      'content-type':
-        response.headers.get('content-type') || 'application/json',
-      'cache-control': 'no-store',
-    },
-  });
+      signal: controller.signal,
+    });
+    return new Response(response.body, {
+      status: response.status,
+      headers: {
+        ...noStore,
+        'content-type':
+          response.headers.get('content-type') || 'application/json',
+      },
+    });
+  } catch (error) {
+    return deny(
+      502,
+      error instanceof Error && error.name === 'AbortError'
+        ? 'Upstream provider timed out.'
+        : 'Upstream provider is unreachable.',
+    );
+  } finally {
+    clearTimeout(timer);
+  }
 }
 
 export async function GET(
@@ -119,10 +159,6 @@ export async function POST(
 ) {
   const contentType = request.headers.get('content-type') || '';
   if (!contentType.includes('application/json'))
-    return Response.json(
-      { error: 'JSON content is required.' },
-      { status: 415, headers: { 'cache-control': 'no-store' } },
-    );
+    return deny(415, 'JSON content is required.');
   return relay(request, (await context.params).kind);
 }
-import { getServerSecret } from '@/lib/server-env';

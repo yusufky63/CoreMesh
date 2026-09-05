@@ -1,6 +1,6 @@
 'use client';
 
-import { lazy, Suspense, useEffect, useRef, useState } from 'react';
+import { lazy, Suspense, useEffect, useState } from 'react';
 import {
   Activity,
   Bot,
@@ -10,6 +10,7 @@ import {
   Command,
   Fingerprint,
   Globe2,
+  Handshake,
   HelpCircle,
   KeyRound,
   MessageSquare,
@@ -24,11 +25,18 @@ import {
 import { useCoreMesh } from '@/lib/store';
 import { HttpTechnocoreAdapter } from '@/lib/adapters';
 import {
+  nextProtocolHealth,
+  protocolRetryDelayMs,
+  protocolStatusLabel,
+} from '@/lib/protocol-health';
+import { coreMeshLocation, coreMeshPath } from '@/lib/routes';
+import {
   AgentsSurface,
   ProvidersSurface,
   RuntimesSurface,
   VaultSurface,
 } from './surfaces/vault-agents-runtime';
+import { DealsSurface } from './surfaces/deals';
 import { MessagesSurface } from './surfaces/messages';
 import { PulseSurface, RoomsSurface } from './surfaces/pulse-rooms';
 import {
@@ -63,6 +71,7 @@ const nav = [
   ['06', 'workers', 'Workers', Bot],
   ['07', 'network', 'Network', Network],
   ['08', 'proofs', 'Proofs', ShieldCheck],
+  ['09', 'deals', 'Deals', Handshake],
 ] as const;
 const utilityNav = [
   ['vault', 'Vault', KeyRound],
@@ -71,36 +80,22 @@ const utilityNav = [
   ['how-it-works', 'How it works', HelpCircle],
   ['settings', 'Settings', Settings],
 ] as const;
-const paths: Record<string, string> = {
-  landing: '/',
-  pulse: '/pulse',
-  rooms: '/rooms',
-  messages: '/messages',
-  agents: '/agents',
-  tasks: '/tasks',
-  workers: '/workers',
-  network: '/network',
-  proofs: '/proofs',
-  vault: '/vault',
-  runtimes: '/runtimes',
-  providers: '/providers',
-  'how-it-works': '/how-it-works',
-  settings: '/settings',
-};
-
 function Surface({
   view,
+  selectedId,
   onLaunch,
   onNavigate,
 }: {
   view: string;
+  selectedId?: string;
   onLaunch: () => void;
   onNavigate: (view: string, selectedId?: string) => void;
 }) {
   if (view === 'landing')
     return <LandingSurface onLaunch={onLaunch} onNavigate={onNavigate} />;
   if (view === 'rooms') return <RoomsSurface />;
-  if (view === 'messages') return <MessagesSurface />;
+  if (view === 'messages')
+    return <MessagesSurface key={selectedId || 'messages'} />;
   if (view === 'agents') return <AgentsSurface />;
   if (view === 'tasks') return <TasksSurface />;
   if (view === 'workers') return <WorkersSurface />;
@@ -118,6 +113,9 @@ function Surface({
       </Suspense>
     );
   if (view === 'proofs') return <ProofsSurface />;
+  // Deals keeps the scanned transcript in component state, so it must not
+  // remount when the selected deal changes.
+  if (view === 'deals') return <DealsSurface />;
   if (view === 'vault') return <VaultSurface />;
   if (view === 'runtimes') return <RuntimesSurface />;
   if (view === 'providers') return <ProvidersSurface />;
@@ -130,30 +128,21 @@ export function CoreMeshApp() {
   const state = useCoreMesh();
   const [palette, setPalette] = useState(false);
   const [commandQuery, setCommandQuery] = useState('');
-  const protocolBooted = useRef(false);
-  const activeView = state.activeView;
   const setView = state.setView;
   const navigate = (view: string, selectedId?: string) => {
     setView(view, selectedId);
-    const path = paths[view] || '/pulse';
+    const path = coreMeshPath(view, selectedId);
     if (window.location.pathname !== path)
-      window.history.pushState({ view }, '', path);
+      window.history.pushState({ view, selectedId }, '', path);
   };
   useEffect(() => {
-    const fromPath = Object.entries(paths).find(
-      ([, path]) =>
-        window.location.pathname === path ||
-        window.location.pathname.startsWith(`${path}/`),
-    )?.[0];
-    if (fromPath && fromPath !== activeView) setView(fromPath);
+    const syncLocation = () => {
+      const location = coreMeshLocation(window.location.pathname);
+      setView(location.view, location.selectedId);
+    };
+    syncLocation();
     const onPop = () => {
-      const view =
-        Object.entries(paths).find(
-          ([, path]) =>
-            window.location.pathname === path ||
-            window.location.pathname.startsWith(`${path}/`),
-        )?.[0] || 'pulse';
-      setView(view);
+      syncLocation();
     };
     const onKey = (event: KeyboardEvent) => {
       if ((event.ctrlKey || event.metaKey) && event.key.toLowerCase() === 'k') {
@@ -168,29 +157,92 @@ export function CoreMeshApp() {
       window.removeEventListener('popstate', onPop);
       window.removeEventListener('keydown', onKey);
     };
-  }, [activeView, setView]);
+  }, [setView]);
   useEffect(() => {
-    if (!state.hydrated || protocolBooted.current) return;
-    protocolBooted.current = true;
-    void (async () => {
+    if (!state.hydrated) return;
+    let stopped = false;
+    let timer: ReturnType<typeof setTimeout> | undefined;
+    let refreshMetadataAfter = 0;
+    let roomEventCursor = '0';
+    let roomEventGeneration: string | undefined;
+
+    const poll = async () => {
       const current = useCoreMesh.getState();
+      let nextDelay = 30_000;
       try {
         const adapter = new HttpTechnocoreAdapter(current.protocol);
-        const [config, rooms] = await Promise.all([
-          adapter.getConfig(),
-          adapter.listRooms(),
-        ]);
+        await adapter.checkHealth();
+        if (stopped) return;
+        const checkedAt = new Date().toISOString();
         const latest = useCoreMesh.getState();
-        rooms.forEach(latest.addRoom);
-        latest.setProtocol(config);
+        latest.setProtocol(
+          nextProtocolHealth(latest.protocol, { ok: true, checkedAt }),
+        );
+
+        let metadataRefreshed = false;
+        if (Date.now() >= refreshMetadataAfter) {
+          const [configResult, roomsResult] = await Promise.allSettled([
+            adapter.getConfig(),
+            adapter.listRooms(),
+          ]);
+          if (stopped) return;
+          const refreshed = useCoreMesh.getState();
+          if (configResult.status === 'fulfilled')
+            refreshed.setProtocol({
+              ...configResult.value,
+              status: 'live',
+              lastCheckedAt: checkedAt,
+              lastSuccessfulAt: checkedAt,
+              consecutiveFailures: 0,
+            });
+          if (roomsResult.status === 'fulfilled') {
+            roomsResult.value.forEach(refreshed.addRoom);
+            metadataRefreshed = true;
+          }
+          refreshMetadataAfter =
+            Date.now() +
+            (configResult.status === 'fulfilled' || metadataRefreshed
+              ? 5 * 60_000
+              : 60_000);
+        }
+
+        const eventWindow = await adapter
+          .readRoomState('events', roomEventCursor)
+          .catch(() => null);
+        if (stopped) return;
+        if (eventWindow) {
+          const generationChanged =
+            roomEventGeneration !== undefined &&
+            eventWindow.generation !== undefined &&
+            roomEventGeneration !== eventWindow.generation;
+          roomEventGeneration = eventWindow.generation;
+          roomEventCursor = generationChanged ? '0' : eventWindow.lastSeq;
+          if (eventWindow.messages.length > 0 && !metadataRefreshed) {
+            const rooms = await adapter.listRooms().catch(() => null);
+            if (stopped) return;
+            if (rooms) rooms.forEach(useCoreMesh.getState().addRoom);
+          }
+        }
       } catch {
-        useCoreMesh.getState().setProtocol({
-          connected: false,
-          sourceLabel: 'TECHNOCORE · OFFLINE',
+        if (stopped) return;
+        const latest = useCoreMesh.getState();
+        const failed = nextProtocolHealth(latest.protocol, {
+          ok: false,
+          checkedAt: new Date().toISOString(),
         });
+        latest.setProtocol(failed);
+        nextDelay = protocolRetryDelayMs(failed);
       }
-    })();
+      if (!stopped) timer = setTimeout(() => void poll(), nextDelay);
+    };
+
+    void poll();
+    return () => {
+      stopped = true;
+      if (timer) clearTimeout(timer);
+    };
   }, [state.hydrated]);
+  const protocolStatus = protocolStatusLabel(state.protocol);
   const commands: { label: string; view: string; action?: () => void }[] = [
     ...nav.map(([, view, label]) => ({ label: `Open ${label}`, view })),
     ...utilityNav.map(([view, label]) => ({ label: `Open ${label}`, view })),
@@ -246,11 +298,15 @@ export function CoreMeshApp() {
         </button>
         <div className="network-state">
           <span
-            className={`status-dot ${state.protocol.connected ? '' : 'quiet'}`}
+            className={`status-dot ${state.protocol.status === 'live' ? '' : state.protocol.status === 'offline' ? 'quiet' : 'warning'}`}
           />{' '}
-          {state.protocol.connected
+          {state.protocol.status === 'live'
             ? 'NETWORK LIVE'
-            : 'TECHNOCORE OFFLINE · LOCAL LAB'}
+            : state.protocol.status === 'degraded'
+              ? 'TECHNOCORE RETRYING · LAST KNOWN DATA'
+              : state.protocol.status === 'connecting'
+                ? 'CONNECTING TO TECHNOCORE'
+                : 'TECHNOCORE OFFLINE · LOCAL LAB'}
         </div>
         <div className="top-actions">
           <button
@@ -300,6 +356,7 @@ export function CoreMeshApp() {
         <section className="main-workspace">
           <Surface
             view={state.activeView}
+            selectedId={state.selectedId}
             onLaunch={() => navigate('pulse')}
             onNavigate={navigate}
           />
@@ -386,14 +443,23 @@ export function CoreMeshApp() {
       <footer className="statusbar">
         <span title="Technocore Protocol Status">
           TECHNOCORE{' '}
-          <b className={state.protocol.connected ? 'ok' : ''}>
-            ● {state.protocol.connected ? 'LIVE' : 'OFFLINE'}
+          <b
+            className={
+              state.protocol.status === 'live'
+                ? 'ok'
+                : state.protocol.status === 'degraded' ||
+                    state.protocol.status === 'connecting'
+                  ? 'warn'
+                  : ''
+            }
+          >
+            ● {protocolStatus}
           </b>
         </span>
         <span title="Active Agents in Mesh">
           AGENTS{' '}
           <b className={state.agents.length ? 'ok' : ''}>
-            {state.agents.length} LIVE
+            {state.agents.length} CONFIGURED
           </b>
         </span>
         <span title="Active Bounded Workers">
@@ -429,13 +495,12 @@ export function CoreMeshApp() {
           SIGS{' '}
           <b className={state.messages.some((m) => m.verified) ? 'ok' : ''}>
             {state.messages.length
-              ? Math.round(
+              ? `${Math.round(
                   (state.messages.filter((m) => m.verified).length /
                     state.messages.length) *
                     100,
-                )
-              : 100}
-            % VERIFIED
+                )}% VERIFIED`
+              : 'NO SAMPLES'}
           </b>
         </span>
         <span title="Protocol Rate Limits">

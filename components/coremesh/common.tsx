@@ -1,6 +1,6 @@
 'use client';
 
-import type { ReactNode } from 'react';
+import { useEffect, useRef, type ReactNode } from 'react';
 import { Check, Copy, FileWarning, X } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import {
@@ -210,9 +210,38 @@ export function CopyButton({
   );
 }
 
+const NOTICE_TTL_MS = 8_000;
+
 export function NoticeStack() {
   const notices = useCoreMesh((state) => state.notices);
   const dismiss = useCoreMesh((state) => state.dismissNotice);
+  const timers = useRef(new Map<string, ReturnType<typeof setTimeout>>());
+  // Success and info notices fade on their own; errors stay until dismissed.
+  useEffect(() => {
+    const active = timers.current;
+    for (const notice of notices) {
+      if (notice.tone === 'error' || active.has(notice.id)) continue;
+      active.set(
+        notice.id,
+        setTimeout(() => {
+          active.delete(notice.id);
+          dismiss(notice.id);
+        }, NOTICE_TTL_MS),
+      );
+    }
+    for (const [id, timer] of active)
+      if (!notices.some((notice) => notice.id === id)) {
+        clearTimeout(timer);
+        active.delete(id);
+      }
+  }, [notices, dismiss]);
+  useEffect(() => {
+    const active = timers.current;
+    return () => {
+      for (const timer of active.values()) clearTimeout(timer);
+      active.clear();
+    };
+  }, []);
   return (
     <div className="notice-stack" aria-live="polite">
       {notices.map((notice) => (

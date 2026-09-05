@@ -86,6 +86,8 @@ export interface RuntimeConnection {
   thinking?: boolean;
   reasoningEffort?: 'low' | 'high' | 'max';
   responseMode?: 'text' | 'json';
+  /** Operator-entered blended price in USD per million tokens; enables cost budgets. */
+  pricePerMillionTokens?: number;
   status: 'untested' | 'connected' | 'error';
 }
 
@@ -97,6 +99,8 @@ export interface Agent {
   role: string;
   capabilities: string[];
   behavior: string;
+  /** Operator-provided reference text; only matching chunks reach a run. */
+  knowledge?: string;
   trusted: boolean;
 }
 
@@ -111,6 +115,14 @@ export interface Room {
   bookmarked: boolean;
   messageCount: number;
   signedPercent: number;
+  /** Server-computed engagement aggregates from `/rooms?format=json`. */
+  engagement?: {
+    idleSeconds?: number;
+    bytes?: number;
+    window?: number;
+    zeroResponseShare?: number;
+    nickDiversity?: number;
+  };
 }
 
 export interface ProtocolMessage {
@@ -128,6 +140,15 @@ export interface ProtocolMessage {
   recipientDid?: string;
 }
 
+export interface E2ESession {
+  id: string;
+  identityId: string;
+  peerDid: string;
+  roomName: string;
+  sealedEnvelope: string;
+  createdAt: string;
+}
+
 export interface WorkerLimits {
   maxEventsPerMinute: number;
   maxRunsPerHour: number;
@@ -135,6 +156,52 @@ export interface WorkerLimits {
   maxTokensPerDay: number;
   maxCostPerDay: number;
   cooldownSeconds: number;
+  /** Per-run output cap; the runtime's own cap still applies when lower. */
+  maxOutputPerRun?: number;
+  /** Characters of room context handed to the model per run. */
+  maxContextChars?: number;
+}
+
+export const WORKER_BUDGET_DEFAULTS = {
+  cooldownSeconds: 30,
+  maxRunsPerHour: 20,
+  maxEventsPerMinute: 20,
+  maxWritesPerMinute: 3,
+  maxTokensPerDay: 200_000,
+  maxCostPerDay: 10,
+  maxContextChars: 4_000,
+  /** Per-run output caps by worker type: chat-sized replies stay small. */
+  maxOutputPerRun: {
+    'room-listener': 800,
+    'smart-responder': 1_200,
+    'presence-worker': 400,
+    'proof-verifier': 1_200,
+    'model-router': 800,
+    archivist: 1_600,
+    'task-scout': 1_600,
+    'task-executor': 4_096,
+    'research-worker': 4_096,
+  } as Record<Worker['type'], number>,
+  /** DeepSeek thinking needs room for reasoning before the answer. */
+  minOutputWithThinking: 2_048,
+};
+
+export function workerOutputCap(worker: Worker, runtimeMax?: number): number {
+  const cap =
+    worker.limits.maxOutputPerRun ??
+    WORKER_BUDGET_DEFAULTS.maxOutputPerRun[worker.type] ??
+    1_600;
+  return Math.max(64, Math.min(cap, runtimeMax ?? cap));
+}
+
+export function estimateRunCost(
+  tokens: number | undefined,
+  pricePerMillionTokens: number | undefined,
+): number {
+  if (!tokens || !pricePerMillionTokens || pricePerMillionTokens <= 0)
+    return 0;
+  return Math.round((tokens / 1_000_000) * pricePerMillionTokens * 10_000) /
+    10_000;
 }
 
 export interface Worker {
@@ -160,6 +227,12 @@ export interface Worker {
   lastRunAt?: string;
   dedupeWindowMinutes: number;
   loopThreshold: number;
+  /**
+   * What a smart-responder treats as relevant: any question mark, or only
+   * lines that mention the agent by name or DID. Mentions are the frugal
+   * default for busy public rooms.
+   */
+  relevance?: 'questions' | 'mentions';
 }
 
 export interface WorkerRun {
@@ -237,6 +310,10 @@ export interface ProtocolConfig {
   serviceVersion?: string;
   connectedAt?: string;
   connected: boolean;
+  status: 'connecting' | 'live' | 'degraded' | 'offline';
+  lastCheckedAt?: string;
+  lastSuccessfulAt?: string;
+  consecutiveFailures: number;
   sourceLabel: string;
 }
 

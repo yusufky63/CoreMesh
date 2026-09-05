@@ -26,6 +26,10 @@ export function DecryptedText({
   const intervalRef = useRef<NodeJS.Timeout | null>(null);
 
   const startScramble = useCallback(() => {
+    if (window.matchMedia('(prefers-reduced-motion: reduce)').matches) {
+      setDisplayText(text);
+      return;
+    }
     if (isScramblingRef.current) return;
     isScramblingRef.current = true;
 

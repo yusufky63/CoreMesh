@@ -3,6 +3,7 @@
 import { useState } from 'react';
 import { Download, Link2, RefreshCcw, Save, ShieldCheck } from 'lucide-react';
 import { HttpTechnocoreAdapter } from '@/lib/adapters';
+import { nextProtocolHealth, protocolStatusLabel } from '@/lib/protocol-health';
 import { useCoreMesh } from '@/lib/store';
 import {
   CoreButton,
@@ -17,13 +18,25 @@ export function SettingsSurface() {
   const [endpoint, setEndpoint] = useState(state.protocol.baseUrl);
   const [busy, setBusy] = useState(false);
   const [confirmReset, setConfirmReset] = useState(false);
+  const statusLabel = protocolStatusLabel(state.protocol);
+  const statusTone = state.protocol.status === 'live' ? 'ok' : 'warn';
+  const displayTime = (value?: string) =>
+    value
+      ? new Intl.DateTimeFormat(undefined, {
+          hour: '2-digit',
+          minute: '2-digit',
+          second: '2-digit',
+        }).format(new Date(value))
+      : 'NOT YET';
   const connect = async () => {
     setBusy(true);
     try {
-      const config = await new HttpTechnocoreAdapter({
+      const adapter = new HttpTechnocoreAdapter({
         ...state.protocol,
         baseUrl: endpoint.trim().replace(/\/$/u, ''),
-      }).getConfig();
+      });
+      await adapter.checkHealth();
+      const config = await adapter.getConfig();
       state.setProtocol(config);
       setEndpoint(config.baseUrl);
       state.notify(
@@ -31,7 +44,13 @@ export function SettingsSurface() {
         'success',
       );
     } catch (error) {
-      state.setProtocol({ baseUrl: endpoint, connected: false });
+      state.setProtocol({
+        ...nextProtocolHealth(
+          { ...state.protocol, baseUrl: endpoint },
+          { ok: false, checkedAt: new Date().toISOString() },
+        ),
+        baseUrl: endpoint,
+      });
       state.notify(
         error instanceof Error ? error.message : 'Endpoint test failed.',
         'error',
@@ -60,11 +79,7 @@ export function SettingsSurface() {
       />
       <ProtocolStrip
         values={[
-          [
-            'PROTOCOL',
-            state.protocol.connected ? 'CONNECTED' : 'DISCONNECTED',
-            state.protocol.connected ? 'ok' : 'warn',
-          ],
+          ['PROTOCOL', statusLabel, statusTone],
           ['SOURCE', state.protocol.sourceLabel, 'plain'],
           ['ANALYTICS', 'OFF', 'ok'],
           ['SECRETS', 'SESSION ONLY', 'ok'],
@@ -86,18 +101,24 @@ export function SettingsSurface() {
             />
           </Field>
           <div className="adapter-contract">
-            <span>EXPECTED HTTP CONTRACT</span>
-            <code>GET /config</code>
-            <code>GET /rooms</code>
-            <code>GET /r/:room?format=json</code>
-            <code>GET /r/:room/say-signed/…</code>
-            <code>GET /kv/:namespace/:key</code>
+            <span>EXPECTED HTTP CONTRACT · TECHNOCORE 0.11.x</span>
+            <code>GET /healthz · /config · /.well-known/agent.json</code>
+            <code>GET /rooms?format=json · GET /r/events</code>
+            <code>GET /r/:room?format=json&amp;since&amp;wait</code>
+            <code>GET /r/:room/say-signed/… · POST /r/:room</code>
+            <code>GET /kv/:ns/:key · set · set-signed · POST</code>
+            <code>GET /r/:room/export</code>
           </div>
           <div className="action-row">
             <CoreButton
               variant="outline"
               onClick={() => {
-                state.setProtocol({ baseUrl: endpoint, connected: false });
+                state.setProtocol({
+                  baseUrl: endpoint,
+                  connected: false,
+                  status: 'connecting',
+                  consecutiveFailures: 0,
+                });
                 state.notify(
                   'Endpoint saved without claiming connectivity.',
                   'success',
@@ -136,6 +157,22 @@ export function SettingsSurface() {
               <span>DEDUPE</span>
               <strong>{state.protocol.duplicateWindowMs / 60000}m</strong>
             </div>
+            <div>
+              <span>LAST CHECK</span>
+              <strong>{displayTime(state.protocol.lastCheckedAt)}</strong>
+            </div>
+            <div>
+              <span>LAST LIVE</span>
+              <strong>{displayTime(state.protocol.lastSuccessfulAt)}</strong>
+            </div>
+            <div>
+              <span>RETRY COUNT</span>
+              <strong>{state.protocol.consecutiveFailures}</strong>
+            </div>
+            <div>
+              <span>HEALTH MODE</span>
+              <strong>{statusLabel}</strong>
+            </div>
           </div>
           <h2>SECURITY POSTURE</h2>
           <ul className="security-list">
@@ -162,6 +199,36 @@ export function SettingsSurface() {
               Secrets are redacted from adapter errors and logs.
             </li>
           </ul>
+        </section>
+        <section>
+          <h2>HOSTED RELAY</h2>
+          <p>
+            Hosted provider keys never leave the server. The relay refuses
+            anonymous callers unless the deployment sets COREMESH_RELAY_TOKEN
+            (paste it here for this browser session) or the operator explicitly
+            opens it with COREMESH_RELAY_OPEN=1. Cross-site calls are always
+            refused and every client is rate limited.
+          </p>
+          <Field
+            label="RELAY ACCESS TOKEN (SESSION ONLY)"
+            hint="Kept in memory only. It is cleared when the tab closes and is never written to local storage."
+          >
+            <CoreInput
+              type="password"
+              autoComplete="off"
+              value={state.relayAccessToken}
+              onChange={(event) =>
+                state.setRelayAccessToken(event.target.value)
+              }
+              placeholder="Leave empty when using your own session API keys"
+            />
+          </Field>
+          <div className="adapter-contract">
+            <span>RELAY CONTRACT</span>
+            <code>same-origin only · header x-coremesh-relay</code>
+            <code>60 requests / minute / client (COREMESH_RELAY_RPM)</code>
+            <code>paths: models · chat/completions · messages</code>
+          </div>
         </section>
         <section>
           <h2>LOCAL DATA</h2>
@@ -208,11 +275,13 @@ export function SettingsSurface() {
         <section>
           <h2>FLOP STATUS</h2>
           <div className="future-panel">
-            <span>FUTURE ADAPTER</span>
+            <span>SETTLEMENT ADAPTER</span>
             <strong>NOT CONNECTED</strong>
             <p>
               No balances, points, rewards, airdrop estimates or unpublished
-              endpoints are implemented.
+              endpoints are implemented. Flop Network testnet and mainnet are
+              unreleased; tclk/1 deals are verified read-only in Deals, and the
+              only shipped rail is the value-free paper rehearsal rail.
             </p>
           </div>
         </section>
