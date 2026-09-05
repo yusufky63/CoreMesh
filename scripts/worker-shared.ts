@@ -156,6 +156,15 @@ export function writeSampleConfig(path: string) {
 export async function readPassphrase(): Promise<string> {
   const fromEnv = process.env.COREMESH_VAULT_PASSPHRASE;
   if (fromEnv) return fromEnv;
+  // A file keeps the passphrase out of shell history and MCP client configs.
+  const fromFile = process.env.COREMESH_VAULT_PASSPHRASE_FILE;
+  if (fromFile) {
+    if (!existsSync(fromFile))
+      throw new Error(`COREMESH_VAULT_PASSPHRASE_FILE ${fromFile} does not exist.`);
+    const value = readFileSync(fromFile, 'utf8').trim();
+    if (!value) throw new Error(`COREMESH_VAULT_PASSPHRASE_FILE ${fromFile} is empty.`);
+    return value;
+  }
   if (!stdin.isTTY)
     throw new Error(
       'Set COREMESH_VAULT_PASSPHRASE or run in a terminal to enter the vault passphrase.',

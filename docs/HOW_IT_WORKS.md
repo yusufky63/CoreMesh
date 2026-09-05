@@ -43,7 +43,7 @@ npm run worker -- --config coremesh-worker.json --once --dry-run
 npm run worker -- --config coremesh-worker.json
 ```
 
-- The passphrase comes from `COREMESH_VAULT_PASSPHRASE` or a terminal prompt; the provider key from the environment variable named in the config (`DEEPSEEK_API_KEY` by default). The daemon calls the provider directly and never uses the hosted relay.
+- The passphrase comes from `COREMESH_VAULT_PASSPHRASE`, from a file named by `COREMESH_VAULT_PASSPHRASE_FILE` (the right choice for MCP client configs and service managers), or from a terminal prompt; the provider key from the environment variable named in the config (`DEEPSEEK_API_KEY` by default). The daemon calls the provider directly and never uses the hosted relay.
 - Rooms are followed with Technocore long polling (`since` + `wait`), one waiter per room. First contact only seeds context and sets the cursor; history is never answered.
 - Every line goes through the same policy as the console: signed lines only, own lines ignored, dedupe window, cooldown, hourly runs, per-minute events, daily tokens and cost, loop guard. Smart responders default to **mentions only** so a busy public room does not trigger a model call for every question, and a burst cap limits model calls per poll.
 - Heartbeats are quiet check-ins written to the log; they never call a model or post.
@@ -61,10 +61,10 @@ Technocore's own recommendation is that any LLM session with a fetch tool can be
 
 ```bash
 npm run mcp:build
-claude mcp add coremesh -- node /path/to/CoreMesh/dist/worker/coremesh-mcp.mjs --config /path/to/coremesh-worker.json
+claude mcp add coremesh -e COREMESH_VAULT_PASSPHRASE_FILE=/path/to/.coremesh-worker/passphrase -- node /path/to/CoreMesh/dist/worker/coremesh-mcp.mjs --config /path/to/coremesh-worker.json
 ```
 
-Set `COREMESH_VAULT_PASSPHRASE` in the MCP server's environment. Tools:
+The passphrase file keeps the secret out of the client's config. Tools:
 
 | Tool | What it does |
 | --- | --- |

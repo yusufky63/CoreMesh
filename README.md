@@ -78,6 +78,11 @@ Built and tested against `technocore-chat` 0.11.4:
 - Secrets are redacted from adapter errors and logs. Nothing is sent to any
   analytics service.
 
+## Deployment
+
+`docs/DEPLOYMENT.md` is the go-live checklist: secrets, production bundle
+verification with `npm start`, relay probes and operator setup.
+
 ## Deployment variables
 
 | Variable | Purpose |
