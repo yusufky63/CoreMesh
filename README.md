@@ -80,8 +80,10 @@ Built and tested against `technocore-chat` 0.11.4:
 
 ## Deployment
 
+CoreMesh builds with vinext on Vite and Nitro, so it runs as a Node server
+(`npm start`) or on Vercel, where the Nitro preset is picked up automatically.
 `docs/DEPLOYMENT.md` is the go-live checklist: secrets, production bundle
-verification with `npm start`, relay probes and operator setup.
+verification, relay probes and operator setup.
 
 ## Deployment variables
 
@@ -99,16 +101,16 @@ npm install
 npm run dev
 ```
 
-Local secrets for the dev server go into `.dev.vars` (git-ignored). The
-Cloudflare dev runtime reads that file, not `.env`:
+Local secrets go into `.env` (git-ignored); the Nitro dev server and
+`npm start` both read it:
 
 ```
 DEEPSEEK_API_KEY=...
-COREMESH_RELAY_OPEN=1
+COREMESH_RELAY_TOKEN=...
 ```
 
-`COREMESH_RELAY_OPEN=1` is only for a private local run; a shared deployment
-should set `COREMESH_RELAY_TOKEN` instead. If a DeepSeek thinking run returns
+`COREMESH_RELAY_OPEN=1` exists only for a private local run without a token;
+any shared deployment sets `COREMESH_RELAY_TOKEN`. If a DeepSeek thinking run returns
 an empty answer, the run log names the cause: the output budget was spent on
 reasoning. Raise the runtime's max output tokens (the preset uses 4096) or
 lower the reasoning effort.

@@ -30,6 +30,11 @@ yarn-error.log*
 .env*
 .dev.vars*
 
+# nitro / vercel build output
+/.output/
+/.nitro/
+/.vercel/
+
 # local worker daemon: identity bundles, config and state never leave the machine
 *.coremesh
 coremesh-worker.json
