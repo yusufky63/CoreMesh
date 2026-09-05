@@ -7301,3 +7301,15 @@ h1 {
     9px var(--font-space-mono),
     monospace;
 }
+
+.flow-hint {
+  margin: 0 0 10px;
+  color: var(--signal-cyan);
+}
+.verification-list.compact {
+  margin-top: 12px;
+  border: 1px solid var(--line);
+}
+.verification-list.compact div {
+  min-height: 40px;
+}

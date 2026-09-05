@@ -253,6 +253,8 @@ export interface TaskArtifact {
   name: string;
   uri: string;
   sha256: string;
+  /** Local copy of the content so receipts can be re-verified without pasting. */
+  content?: string;
 }
 
 export interface Task {

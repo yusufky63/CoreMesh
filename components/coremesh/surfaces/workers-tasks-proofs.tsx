@@ -18,7 +18,6 @@ import {
   randomId,
   redactSecrets,
   sha256Text,
-  signData,
   signMessage,
   signTechnocoreMessage,
   untrustedRoomContext,
@@ -41,11 +40,11 @@ import type {
 import {
   WORKER_BUDGET_DEFAULTS,
   estimateRunCost,
-  taskTransitions,
   workerOutputCap,
 } from '@/lib/domain';
 import { useCoreMesh } from '@/lib/store';
 import {
+  CopyButton,
   CoreButton,
   CoreInput,
   CoreTextarea,
@@ -60,6 +59,25 @@ import {
 } from '../common';
 import { QuickUnlockModal } from '../quick-unlock-modal';
 import { parseWorkerExport } from '@/lib/worker-export';
+import {
+  UnlockRequired,
+  assignAndStart,
+  runningTaskForAgent,
+  submitTaskResult,
+  verifyAndComplete,
+  type ReceiptChecks,
+} from '@/lib/task-flow';
+
+function storedArtifactContent(receipt?: WorkReceipt): string {
+  if (!receipt) return '';
+  const task = useCoreMesh
+    .getState()
+    .tasks.find((item) => item.id === receipt.taskId);
+  return (
+    task?.artifacts.find((artifact) => artifact.sha256 === receipt.artifact?.sha256)
+      ?.content || ''
+  );
+}
 import { chunkDocument, knowledgeBlock, selectKnowledge } from '@/lib/knowledge';
 
 const workerTypes: Worker['type'][] = [
@@ -165,6 +183,7 @@ export function WorkersSurface() {
   const [executing, setExecuting] = useState(false);
   const [posting, setPosting] = useState('');
   const [pendingPostRunId, setPendingPostRunId] = useState('');
+  const [pendingSubmitRunId, setPendingSubmitRunId] = useState('');
   const [quickUnlockOpen, setQuickUnlockOpen] = useState(false);
   const [confirmDelete, setConfirmDelete] = useState(false);
   const [editRooms, setEditRooms] = useState(false);
@@ -286,6 +305,37 @@ export function WorkersSurface() {
         error instanceof Error ? error.message : 'Posting failed.',
         'error',
       );
+    } finally {
+      setPosting('');
+    }
+  };
+  /** Turns a reviewed output into the running task's signed artifact and receipt. */
+  const submitRunAsResult = async (run: WorkerRun) => {
+    if (!worker) return;
+    const task = runningTaskForAgent(worker.agentId);
+    if (!task) return state.notify('No running task is assigned to this agent.', 'error');
+    setPosting(run.id);
+    try {
+      await submitTaskResult({ taskId: task.id, content: outputOf(run) });
+      state.updateRun(run.id, {
+        decision: 'output_submitted',
+        logs: [
+          ...run.logs,
+          {
+            at: new Date().toISOString(),
+            type: 'SUBMITTED',
+            detail: `Signed as the result of task ${task.id}; receipt created.`,
+          },
+        ],
+      });
+      state.notify(`Result signed for "${task.title}". Verify & complete it in Tasks.`, 'success');
+    } catch (error) {
+      if (error instanceof UnlockRequired) {
+        setPendingSubmitRunId(run.id);
+        setQuickUnlockOpen(true);
+        return;
+      }
+      state.notify(error instanceof Error ? error.message : 'Submitting failed.', 'error');
     } finally {
       setPosting('');
     }
@@ -731,7 +781,17 @@ export function WorkersSurface() {
                   {run.decision === 'runtime_result_review' &&
                     outputOf(run) && (
                       <div className="action-row run-review-actions">
+                        {runningTaskForAgent(worker.agentId) && (
+                          <CoreButton
+                            onClick={() => void submitRunAsResult(run)}
+                            disabled={posting === run.id}
+                          >
+                            <FileCheck2 size={12} />
+                            SUBMIT AS TASK RESULT
+                          </CoreButton>
+                        )}
                         <CoreButton
+                          variant={runningTaskForAgent(worker.agentId) ? 'outline' : 'default'}
                           onClick={() => void postRun(run)}
                           disabled={posting === run.id}
                         >
@@ -740,6 +800,7 @@ export function WorkersSurface() {
                             ? 'POSTING…'
                             : 'APPROVE & POST SIGNED'}
                         </CoreButton>
+                        <CopyButton value={outputOf(run)} label="COPY OUTPUT" />
                         <CoreButton
                           variant="outline"
                           onClick={() =>
@@ -774,8 +835,11 @@ export function WorkersSurface() {
           targetIdentityId={workerIdentity?.id}
           onUnlocked={() => {
             const pending = runs.find((run) => run.id === pendingPostRunId);
+            const pendingSubmit = runs.find((run) => run.id === pendingSubmitRunId);
             setPendingPostRunId('');
+            setPendingSubmitRunId('');
             if (pending) void postRun(pending);
+            if (pendingSubmit) void submitRunAsResult(pendingSubmit);
           }}
         />
       </>
@@ -1106,6 +1170,7 @@ export function TasksSurface() {
   );
   const [title, setTitle] = useState('Review protocol room ownership');
   const [quickUnlockOpen, setQuickUnlockOpen] = useState(false);
+  const [checks, setChecks] = useState<ReceiptChecks>();
   const [description, setDescription] = useState(
     'Compare managed room behavior and produce an evidence-backed artifact.',
   );
@@ -1166,117 +1231,64 @@ export function TasksSurface() {
     }
   };
   const submit = async () => {
-    if (!task || !task.assignedAgentDid || !artifactContent.trim())
-      return state.notify(
-        'Assigned agent and artifact content are required.',
-        'error',
-      );
-    const current = useCoreMesh.getState();
-    const identity = current.identities.find(
-      (item) => item.did === task.assignedAgentDid,
-    );
-    const key = identity && current.unlockedKeys[identity.id];
-    if (!identity || !key) {
-      if (identity) {
+    if (!task) return;
+    try {
+      await submitTaskResult({
+        taskId: task.id,
+        content: artifactContent,
+        artifactName,
+      });
+      state.notify('Signed CoreMesh Work Receipt created.', 'success');
+      setArtifactContent('');
+    } catch (error) {
+      if (error instanceof UnlockRequired) {
         setQuickUnlockOpen(true);
         return;
       }
-      return state.notify('Unlock the assigned signing identity.', 'error');
-    }
-    const artifact = {
-      name: artifactName,
-      uri: `coremesh://artifact/${task.id}/${encodeURIComponent(artifactName)}`,
-      sha256: await sha256Text(artifactContent),
-    };
-    const room = state.rooms.find((item) => item.id === task.room);
-    if (!room)
-      return state.notify('This task has no managed workspace.', 'error');
-    const priorNonce = state.messages
-      .filter(
-        (message) =>
-          message.roomId === room.id &&
-          message.from === identity.did &&
-          /^\d{1,19}$/u.test(message.nonce),
-      )
-      .reduce(
-        (highest, message) =>
-          BigInt(message.nonce) > highest ? BigInt(message.nonce) : highest,
-        BigInt(0),
+      state.notify(
+        error instanceof Error ? error.message : 'Submitting the result failed.',
+        'error',
       );
-    const clock = BigInt(new Date().getTime());
-    const nonce = (
-      clock > priorNonce ? clock : priorNonce + BigInt(1)
-    ).toString();
-    const anchorText = `COREMESH_RESULT ${task.id} ${artifact.uri} sha256:${artifact.sha256}`;
-    let anchor;
-    if (room.source === 'technocore') {
-      if (!state.protocol.connected)
-        return state.notify('Technocore is disconnected.', 'error');
-      const signed = signTechnocoreMessage(room.name, nonce, anchorText, key);
-      anchor = {
-        id: `tcresult_${task.id}_${nonce}`,
-        roomId: room.id,
-        from: identity.did,
-        text: signed.text,
-        createdAt: new Date().toISOString(),
-        seq: nonce,
-        nonce,
-        signature: signed.signature,
-        verified: true,
-      };
-      try {
-        const received = await new HttpTechnocoreAdapter(
-          state.protocol,
-        ).sendSignedMessage(room.name, anchor);
-        const echoed = received.some(
-          (message) => message.from === identity.did && message.nonce === nonce,
-        );
-        state.mergeProtocolMessages(
-          room.id,
-          echoed ? received : [...received, anchor],
-        );
-      } catch (error) {
-        return state.notify(
-          error instanceof Error ? error.message : 'Result anchor failed.',
-          'error',
-        );
-      }
-    } else {
-      const base = {
-        roomId: room.id,
-        from: identity.did,
-        text: anchorText,
-        createdAt: new Date().toISOString(),
-        seq: nonce,
-        nonce,
-        inReplyTo: undefined,
-      };
-      anchor = {
-        id: randomId('result'),
-        ...base,
-        signature: signMessage(base, key),
-        verified: true,
-      };
-      state.addMessage(anchor);
     }
-    state.updateTask(task.id, { artifacts: [...task.artifacts, artifact] });
-    if (task.status === 'running') state.transitionTask(task.id, 'submitted');
-    const receiptData = {
-      version: 'coremesh-work-v1' as const,
-      taskId: task.id,
-      agentDid: identity.did,
-      room: room.name,
-      seq: anchor.seq,
-      nonce: anchor.nonce,
-      artifact,
-      createdAt: new Date().toISOString(),
-    };
-    state.addReceipt({ ...receiptData, signature: signData(receiptData, key) });
-    state.notify('Signed CoreMesh Work Receipt created.', 'success');
-    setArtifactContent('');
+  };
+  const startTask = async () => {
+    if (!task || !assignee) return;
+    try {
+      const { claimed } = await assignAndStart(task.id, assignee);
+      state.notify(
+        claimed
+          ? 'Task is running and its managed room was claimed on Technocore.'
+          : 'Task is running. Execute the worker of this agent or paste a result.',
+        'success',
+      );
+    } catch (error) {
+      state.notify(
+        error instanceof Error ? error.message : 'Could not start the task.',
+        'error',
+      );
+    }
+  };
+  const completeTask = async () => {
+    if (!task) return;
+    try {
+      const result = await verifyAndComplete(task.id);
+      setChecks(result.checks);
+      state.notify(
+        result.completed
+          ? 'Receipt verified on every layer. Task completed.'
+          : result.checks
+            ? 'Receipt did not verify; the task stays in verifying.'
+            : 'No receipt yet. Submit a result first.',
+        result.completed ? 'success' : 'error',
+      );
+    } catch (error) {
+      state.notify(
+        error instanceof Error ? error.message : 'Verification failed.',
+        'error',
+      );
+    }
   };
   if (task) {
-    const next = taskTransitions[task.status];
     const room = state.rooms.find((item) => item.id === task.room);
     return (
       <>
@@ -1352,36 +1364,116 @@ export function TasksSurface() {
                 </span>
               ))}
             </div>
+            <p className="workspace-note flow-hint">
+              {task.status === 'draft' || task.status === 'open' || task.status === 'applied'
+                ? 'Next: choose an agent and press Assign & start. Open, assigned and running happen in one step.'
+                : task.status === 'assigned'
+                  ? 'Next: press Start, then execute the agent\'s worker in Workers.'
+                  : task.status === 'running'
+                    ? 'Next: in Workers, execute the research worker and press "Submit as task result", or paste a result on the right.'
+                    : task.status === 'submitted' || task.status === 'verifying'
+                      ? 'Next: press Verify & complete. The receipt is checked here; no need to open Proofs.'
+                      : task.status === 'completed'
+                        ? 'Done. The signed receipt lives in Proofs and can be verified by anyone.'
+                        : task.status === 'disputed'
+                          ? 'The result was disputed. Re-verify after a new submission or cancel.'
+                          : task.status === 'failed'
+                            ? 'Retry returns the task to running.'
+                            : 'This task is closed.'}
+            </p>
             <div className="transition-box">
-              {next.includes('assigned') && (
-                <select
-                  className="core-select"
-                  value={assignee}
-                  onChange={(event) => setAssignee(event.target.value)}
-                >
-                  <option value="">Choose agent</option>
-                  {state.agents.map((agent) => (
-                    <option value={agent.id} key={agent.id}>
-                      {agent.name}
-                    </option>
-                  ))}
-                </select>
+              {(task.status === 'draft' || task.status === 'open' || task.status === 'applied') && (
+                <>
+                  <select
+                    className="core-select"
+                    value={assignee}
+                    onChange={(event) => setAssignee(event.target.value)}
+                  >
+                    <option value="">Choose agent</option>
+                    {state.agents.map((agent) => (
+                      <option value={agent.id} key={agent.id}>
+                        {agent.name}
+                      </option>
+                    ))}
+                  </select>
+                  <CoreButton onClick={() => void startTask()} disabled={!assignee}>
+                    <Play size={12} />
+                    ASSIGN & START
+                  </CoreButton>
+                  <CoreButton variant="outline" onClick={() => void advance('cancelled')}>
+                    CANCEL TASK
+                  </CoreButton>
+                </>
               )}
-              {next.map((status) => (
-                <CoreButton
-                  variant={
-                    status === 'cancelled' || status === 'failed'
-                      ? 'outline'
-                      : 'default'
-                  }
-                  onClick={() => void advance(status)}
-                  disabled={status === 'assigned' && !assignee}
-                  key={status}
-                >
-                  {status.toUpperCase()}
+              {task.status === 'assigned' && (
+                <>
+                  <CoreButton onClick={() => void advance('running')}>
+                    <Play size={12} />
+                    START
+                  </CoreButton>
+                  <CoreButton variant="outline" onClick={() => void advance('cancelled')}>
+                    CANCEL TASK
+                  </CoreButton>
+                </>
+              )}
+              {task.status === 'running' && (
+                <>
+                  <CoreButton variant="outline" onClick={() => void advance('failed')}>
+                    MARK FAILED
+                  </CoreButton>
+                  <CoreButton variant="outline" onClick={() => void advance('cancelled')}>
+                    CANCEL TASK
+                  </CoreButton>
+                </>
+              )}
+              {(task.status === 'submitted' || task.status === 'verifying' || task.status === 'disputed') && (
+                <>
+                  <CoreButton onClick={() => void completeTask()}>
+                    <ShieldCheck size={12} />
+                    {task.status === 'disputed' ? 'RE-VERIFY' : 'VERIFY & COMPLETE'}
+                  </CoreButton>
+                  {task.status !== 'disputed' && (
+                    <CoreButton variant="outline" onClick={() => void advance('disputed')}>
+                      DISPUTE
+                    </CoreButton>
+                  )}
+                  {task.status === 'verifying' && (
+                    <CoreButton variant="outline" onClick={() => void advance('failed')}>
+                      MARK FAILED
+                    </CoreButton>
+                  )}
+                  {task.status === 'disputed' && (
+                    <CoreButton variant="outline" onClick={() => void advance('cancelled')}>
+                      CANCEL TASK
+                    </CoreButton>
+                  )}
+                </>
+              )}
+              {task.status === 'failed' && (
+                <CoreButton onClick={() => void advance('running')}>
+                  <Play size={12} />
+                  RETRY
                 </CoreButton>
-              ))}
+              )}
             </div>
+            {checks && (
+              <div className="verification-list compact">
+                {Object.entries({
+                  DID: checks.did,
+                  SIGNATURE: checks.signature,
+                  'ROOM RECORD': checks.room,
+                  'TASK RELATION': checks.task,
+                  'ARTIFACT HASH': checks.artifact,
+                }).map(([label, status]) => (
+                  <div key={label}>
+                    <span>{label}</span>
+                    <strong className={status === 'valid' ? 'valid' : status === 'invalid' ? 'invalid' : 'unchecked'}>
+                      {status === 'valid' ? 'VALID' : status === 'invalid' ? 'NOT VERIFIED' : 'NOT CHECKED'}
+                    </strong>
+                  </div>
+                ))}
+              </div>
+            )}
           </section>
           <aside className="task-workspace">
             <div className="workspace-tabs">
@@ -1738,6 +1830,7 @@ export function ProofsSurface() {
               variant="outline"
               onClick={() => (
                 setRaw(JSON.stringify(state.receipts.at(-1), null, 2)),
+                setArtifactContent(storedArtifactContent(state.receipts.at(-1))),
                 setResult(undefined)
               )}
             >
@@ -1871,6 +1964,7 @@ export function ProofsSurface() {
           <button
             onClick={() => {
               setRaw(JSON.stringify(receipt, null, 2));
+              setArtifactContent(storedArtifactContent(receipt));
               setResult(undefined);
             }}
             key={`${receipt.taskId}-${receipt.nonce}`}

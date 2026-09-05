@@ -80,6 +80,8 @@ There is deliberately no approval tool. A queued output is approved by a human i
 
 ## Tasks and workspaces
 
+The task flow is three clicks: **Assign & start** (open, assign and run in one step; public tasks claim their Technocore room on the way), a result (**Submit as task result** on a worker run, or paste one on the task page; the artifact is hashed, anchored in the task room and signed into a receipt), then **Verify & complete**, which checks the receipt on every layer right on the task page and completes the task when all five checks pass. Dispute, fail, retry and cancel remain available for the exceptions. Each page shows a one-line "Next" hint, and a successful provider test creates the runtime automatically.
+
 Tasks start as local drafts. Choose **Private** to keep the task room local, or **Public** to claim a managed `d-task-*` room on Technocore when the task is assigned and the owner key is unlocked. Task memory has goal, current state, open questions, decisions and next actions, each edit bumping the memory version. Submitting an artifact hashes it with SHA-256, anchors a signed result line in the task room, and produces a CoreMesh Work Receipt that Proofs can verify independently. Runtimes, agents and workers can be removed from their own views; removing an agent also removes its workers and run records, while the identity stays in Vault.
 
 ## What is implemented

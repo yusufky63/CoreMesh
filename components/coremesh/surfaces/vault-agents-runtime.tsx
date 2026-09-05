@@ -1101,6 +1101,36 @@ export function ProvidersSurface() {
         : result.detail,
       result.ok ? 'success' : 'error',
     );
+    // First successful test: create the runtime automatically so the next
+    // step (connecting an agent) needs no configuration.
+    if (
+      result.ok &&
+      !useCoreMesh.getState().runtimes.some((item) => item.providerId === provider.id)
+    ) {
+      const preferred =
+        result.models?.find((model) => /flash|mini|haiku|small/iu.test(model)) ||
+        result.models?.[0] ||
+        provider.models?.[0];
+      const local = ['lm-studio', 'ollama', 'custom-http'].includes(provider.kind);
+      state.addRuntime({
+        id: randomId('runtime'),
+        type: local ? 'local-model' : 'managed-ai',
+        name: `${provider.name} runtime`,
+        providerId: provider.id,
+        model: preferred,
+        temperature: provider.kind === 'deepseek' ? 1 : 0.3,
+        maxOutput: provider.kind === 'deepseek' ? 4096 : 2048,
+        timeout: provider.kind === 'deepseek' ? 90 : 60,
+        thinking: provider.kind === 'deepseek' ? true : undefined,
+        reasoningEffort: provider.kind === 'deepseek' ? 'high' : undefined,
+        responseMode: 'text',
+        status: 'connected',
+      });
+      state.notify(
+        `Runtime "${provider.name} runtime" created with ${preferred || 'the default model'}. Connect an agent next.`,
+        'success',
+      );
+    }
     setTesting('');
   };
   const applyTemplate = (next: Provider['kind']) => {
