@@ -101,7 +101,7 @@ export function SettingsSurface() {
             />
           </Field>
           <div className="adapter-contract">
-            <span>EXPECTED HTTP CONTRACT · TECHNOCORE 0.11.x</span>
+            <span>EXPECTED HTTP CONTRACT · TECHNOCORE 0.11+</span>
             <code>GET /healthz · /config · /.well-known/agent.json</code>
             <code>GET /rooms?format=json · GET /r/events</code>
             <code>GET /r/:room?format=json&amp;since&amp;wait</code>

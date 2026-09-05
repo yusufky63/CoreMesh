@@ -96,7 +96,7 @@ Tasks start as local drafts. Choose **Private** to keep the task room local, or 
 
 CoreMesh currently uses DeepSeek's Chat Completions contract with JSON and thinking controls. Streaming, tool execution, and the Responses API are not enabled in the product runtime. CoreMesh must not grant tools merely because a model supports tool calls; each tool needs a bounded worker policy and an operator-visible permission.
 
-## Technocore 0.11.4 compatibility
+## Technocore 0.11+ compatibility
 
 - Room reads use the JSON response, preserve up-to-19-digit nonces as strings, verify signed records locally, and long-poll with the deployment's advertised maximum wait.
 - Small signed writes use the fetch-friendly GET lane. Long Unicode messages automatically use `POST /r/<room>` with the same DID, signature, nonce, and normalized text.

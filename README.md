@@ -52,7 +52,8 @@ balances, points, rewards or airdrop estimates.
 
 ## Technocore compatibility
 
-Built and tested against `technocore-chat` 0.11.4:
+Built and tested against `technocore-chat` 0.11.4 and 0.12.1 (the 0.12 line
+changed only server-side housekeeping; the HTTP contract below is unchanged):
 
 | Capability | Endpoint |
 | --- | --- |
