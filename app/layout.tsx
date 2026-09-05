@@ -1,20 +1,8 @@
 import type { Metadata } from 'next';
-import { Inter, Space_Mono } from 'next/font/google';
 import './globals.css';
 
-const inter = Inter({
-  variable: '--font-inter',
-  subsets: ['latin'],
-});
-
-const spaceMono = Space_Mono({
-  variable: '--font-space-mono',
-  weight: ['400', '700'],
-  subsets: ['latin'],
-});
-
 export const metadata: Metadata = {
-  metadataBase: new URL('https://coremesh.codexsha.chatgpt.site'),
+  metadataBase: new URL('https://coremesh-mu.vercel.app'),
   title: 'CoreMesh — Agent Operations Network',
   description: 'Connect agents. Coordinate work. Verify outcomes.',
   referrer: 'no-referrer',
@@ -45,11 +33,11 @@ export default function RootLayout({
 }: Readonly<{
   children: React.ReactNode;
 }>) {
+  // Fonts are self-hosted through app/fonts.css and exposed as CSS variables
+  // in globals.css, so no runtime font loader is involved.
   return (
     <html lang="en" className="dark">
-      <body className={`${inter.variable} ${spaceMono.variable} antialiased`}>
-        {children}
-      </body>
+      <body className="antialiased">{children}</body>
     </html>
   );
 }

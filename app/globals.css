@@ -1,8 +1,11 @@
 @import 'tailwindcss';
 @import 'tw-animate-css';
 @import 'shadcn/tailwind.css';
+@import './fonts.css';
 
 :root {
+  --font-inter: 'Inter';
+  --font-space-mono: 'Space Mono';
   --bg-0: #050505;
   --bg-1: #090909;
   --bg-2: #0f0f0f;

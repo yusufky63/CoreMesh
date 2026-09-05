@@ -6,7 +6,7 @@
     "node": ">=22.13.0"
   },
   "scripts": {
-    "dev": "vinext dev",
+    "dev": "vite dev",
     "build": "vinext build",
     "start": "node .output/server/index.mjs",
     "lint": "oxlint",
