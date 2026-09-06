@@ -13,6 +13,8 @@ import {
 import { Input } from '@/components/ui/input';
 import { Textarea } from '@/components/ui/textarea';
 import { nodeGlyph } from '@/lib/crypto';
+import { explainError } from '@/lib/help';
+import { coreMeshPath } from '@/lib/routes';
 import { useCoreMesh } from '@/lib/store';
 
 export function SectionHeader({
@@ -242,23 +244,51 @@ export function NoticeStack() {
       active.clear();
     };
   }, []);
+  const setView = useCoreMesh((state) => state.setView);
+  const go = (view: string) => {
+    setView(view);
+    const path = coreMeshPath(view);
+    if (window.location.pathname !== path)
+      window.history.pushState({ view }, '', path);
+  };
   return (
     <div className="notice-stack" aria-live="polite">
-      {notices.map((notice) => (
-        <div className={`notice ${notice.tone}`} key={notice.id}>
-          {notice.tone === 'success' ? (
-            <Check size={13} />
-          ) : notice.tone === 'error' ? (
-            <X size={13} />
-          ) : (
-            <span>i</span>
-          )}
-          <p>{notice.message}</p>
-          <button onClick={() => dismiss(notice.id)} aria-label="Dismiss">
-            <X size={12} />
-          </button>
-        </div>
-      ))}
+      {notices.map((notice) => {
+        const help = notice.tone === 'error' ? explainError(notice.message) : undefined;
+        return (
+          <div className={`notice ${notice.tone}`} key={notice.id}>
+            {notice.tone === 'success' ? (
+              <Check size={13} />
+            ) : notice.tone === 'error' ? (
+              <X size={13} />
+            ) : (
+              <span>i</span>
+            )}
+            <div className="notice-body">
+              <p>{notice.message}</p>
+              {help && (
+                <p className="notice-hint">
+                  {help.hint}
+                  {help.view && (
+                    <button
+                      type="button"
+                      onClick={() => {
+                        go(help.view as string);
+                        dismiss(notice.id);
+                      }}
+                    >
+                      OPEN {help.view.toUpperCase()}
+                    </button>
+                  )}
+                </p>
+              )}
+            </div>
+            <button onClick={() => dismiss(notice.id)} aria-label="Dismiss">
+              <X size={12} />
+            </button>
+          </div>
+        );
+      })}
     </div>
   );
 }

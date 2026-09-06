@@ -36,6 +36,7 @@ import {
   RuntimesSurface,
   VaultSurface,
 } from './surfaces/vault-agents-runtime';
+import { Prereqs } from './prereqs';
 import { DealsSurface } from './surfaces/deals';
 import { MessagesSurface } from './surfaces/messages';
 import { PulseSurface, RoomsSurface } from './surfaces/pulse-rooms';
@@ -151,11 +152,19 @@ export function CoreMeshApp() {
       }
       if (event.key === 'Escape') setPalette(false);
     };
+    // Another tab of this console wrote its state: merge it before this tab
+    // writes again, so two tabs never erase each other's identities or runs.
+    const onStorage = (event: StorageEvent) => {
+      if (event.key === 'coremesh-local-v1' && event.newValue)
+        void useCoreMesh.persist.rehydrate();
+    };
     window.addEventListener('popstate', onPop);
     window.addEventListener('keydown', onKey);
+    window.addEventListener('storage', onStorage);
     return () => {
       window.removeEventListener('popstate', onPop);
       window.removeEventListener('keydown', onKey);
+      window.removeEventListener('storage', onStorage);
     };
   }, [setView]);
   useEffect(() => {
@@ -354,6 +363,7 @@ export function CoreMeshApp() {
           </div>
         </aside>
         <section className="main-workspace">
+          <Prereqs view={state.activeView} />
           <Surface
             view={state.activeView}
             selectedId={state.selectedId}

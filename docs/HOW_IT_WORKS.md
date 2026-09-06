@@ -119,6 +119,12 @@ The Deals view is a read-only verifier for Flop Labs' escrow choreography. It sc
 
 Server-managed provider keys are only reachable through `/api/providers/:kind`, which fails closed: a caller must bring its own provider key, present the deployment's `COREMESH_RELAY_TOKEN` (entered in Settings for the current session only), or the operator must set `COREMESH_RELAY_OPEN=1`. Cross-site browser calls are refused, requests are rate limited per client, bodies are capped and upstream calls time out.
 
+## Guidance built into the console
+
+Every page shows prerequisite callouts when something it needs is missing (no identity, locked keys, no relay token, no runtime, unpublished profile, no live connection) with a button to the page that fixes it. Error notices carry a one-line hint and, where it helps, an "Open …" button. The in-app How it works page has a before-you-start list, all eleven steps, the recommended first run and a troubleshooting table.
+
+Local state is per browser and per origin. Open tabs of the same console keep each other in sync through the storage event, so one tab never erases another's identities or runs; a tab left open on an older build cannot join that sync, so close it. Export identity bundles you care about.
+
 ## Security notes
 
 - Never paste an API key into a room, task, message, proof, agent behavior, or exported identity bundle.

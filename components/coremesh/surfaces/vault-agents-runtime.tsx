@@ -211,6 +211,9 @@ export function VaultSurface() {
         messageCount: 0,
         signedPercent: 0,
       });
+      state.updateIdentity(identity.id, {
+        profilePublishedAt: new Date().toISOString(),
+      });
       state.notify(
         'Public DID note published with mailbox and X25519 public key.',
         'success',

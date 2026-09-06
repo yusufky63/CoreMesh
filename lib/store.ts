@@ -64,6 +64,7 @@ interface CoreMeshState {
   setExploreMode: (value: boolean) => void;
   setOnboardingSeen: (value: boolean) => void;
   addIdentity: (identity: Identity) => void;
+  updateIdentity: (id: string, patch: Partial<Identity>) => void;
   removeIdentity: (id: string) => void;
   setUnlockedKey: (id: string, key?: Uint8Array) => void;
   setUnlockedXKey: (id: string, key?: Uint8Array) => void;
@@ -332,7 +333,8 @@ export function persistedSlice(state: CoreMeshState): Partial<CoreMeshState> {
   };
 }
 
-export const useCoreMesh = create<CoreMeshState>()(
+const createCoreMeshStore = () =>
+  create<CoreMeshState>()(
   persist<CoreMeshState, [], [], Partial<CoreMeshState>>(
     (set, get) => ({
       hydrated: false,
@@ -341,6 +343,12 @@ export const useCoreMesh = create<CoreMeshState>()(
       setView: (activeView, selectedId) => set({ activeView, selectedId }),
       setExploreMode: (exploreMode) => set({ exploreMode }),
       setOnboardingSeen: (onboardingSeen) => set({ onboardingSeen }),
+      updateIdentity: (id, patch) =>
+        set((state) => ({
+          identities: state.identities.map((item) =>
+            item.id === id ? { ...item, ...patch } : item,
+          ),
+        })),
       addIdentity: (identity) =>
         set((state) => ({
           identities: [
@@ -880,4 +888,15 @@ export const useCoreMesh = create<CoreMeshState>()(
       onRehydrateStorage: () => (state) => state?.setHydrated(true),
     },
   ),
-);
+  );
+
+/**
+ * One store per page. Hot module reloads in development re-execute this
+ * module; without the guard a second instance would keep writing its stale
+ * snapshot to localStorage and erase changes made through the new one.
+ */
+const storeHost = globalThis as unknown as {
+  __coremeshStore?: ReturnType<typeof createCoreMeshStore>;
+};
+export const useCoreMesh =
+  storeHost.__coremeshStore ?? (storeHost.__coremeshStore = createCoreMeshStore());

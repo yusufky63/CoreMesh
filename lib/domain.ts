@@ -39,6 +39,8 @@ export interface Identity {
   encryptedX25519PrivateKey?: string;
   mailbox?: string;
   createdAt: string;
+  /** Set when the DID note (mailbox + X25519) was last published to Technocore. */
+  profilePublishedAt?: string;
 }
 
 export interface EncryptedBundle {
