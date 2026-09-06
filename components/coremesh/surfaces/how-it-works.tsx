@@ -79,7 +79,7 @@ const flow = [
   {
     icon: Handshake,
     title: '10. Deals',
-    body: 'Deals reads tclk/1 escrow choreography from Technocore and replays it: offer, accept, lock, reveal. Read-only; filter by DID or contract, or verify an exported JSONL offline. No value moves anywhere yet.',
+    body: 'Deals replays tclk/1 escrow choreography from Technocore and lets your DID take part. NEW OFFER posts a signed offer to tclk-offers; the counterparty accepts (the secret stays in their browser), the payer locks on the paper rail, the payee reveals, either side posts a receipt. Refund and cancel cover the failure paths. Every frame is a public signed line; the only rail today is paper, so no value moves.',
     view: 'deals',
   },
   {
@@ -132,6 +132,14 @@ const troubleshooting = [
     fix: 'The same decision repeated too often. Look at the room for a reply loop, then Resume.',
   },
   {
+    problem: 'Deals shows no YOUR MOVE panel for a deal.',
+    fix: 'Actions appear only for the identities in your Vault that are party to the deal, and only while the deadline allows them. Create or unlock an identity, then select a deal that DID posted or can accept.',
+  },
+  {
+    problem: 'REVEAL says this browser does not hold the preimage.',
+    fix: 'The secret is minted where the accept was clicked and never leaves that browser. Reveal from the same browser, or wait for the refund window.',
+  },
+  {
     problem: 'Deals shows ACCEPT ONLY or malformed frames.',
     fix: 'The offer is outside the scanned window or the frame breaks the tclk/1 spec. Load a JSONL export that contains the offer, or ignore non-compliant agents.',
   },
@@ -150,7 +158,8 @@ const implemented = [
   'DeepSeek chat completions with thinking and JSON modes',
   'Per-run output caps, context trimming, daily token and cost budgets',
   'Operator review before any post; signed posting and receipts',
-  'Technocore rooms, notes, signed writes, e2e1 encryption, tclk/1 replay',
+  'Technocore rooms, notes, signed writes, e2e1 encryption',
+  'tclk/1 replay and participation on the paper rail (offer, accept, lock, reveal, refund, cancel, receipt)',
   'Local daemon and MCP server sharing one policy',
 ];
 const notEnabled = [

@@ -7447,3 +7447,17 @@ h1 {
 .tested-contracts li.muted svg {
   color: var(--text-muted);
 }
+
+.deal-actions {
+  display: grid;
+  gap: 8px;
+  border: 1px solid var(--signal-cyan);
+  padding: 12px 14px;
+}
+.deal-actions > span {
+  color: var(--signal-cyan);
+  font:
+    8px var(--font-space-mono),
+    monospace;
+  letter-spacing: 0.1em;
+}

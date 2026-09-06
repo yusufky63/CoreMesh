@@ -102,6 +102,8 @@ export function Prereqs({ view }: { view: string }) {
       break;
     case 'deals':
       if (!live) need('Scanning needs a live Technocore connection. Offline JSONL still works.', { label: 'OPEN SETTINGS', view: 'settings' });
+      if (!hasIdentity) need('Verifying works without an identity. To post an offer or take part in a deal, create or import a DID first.', toVault);
+      else if (!unlocked) need('Deal moves are signed lines. Unlock the identity, or the first move will ask for the passphrase.', toVault);
       break;
     case 'proofs':
       if (!state.receipts.length)

@@ -141,6 +141,17 @@ function mapRoomRead(room: string, value: unknown): ProtocolMessage[] {
   return mapParsedRoomRead(room, TechnocoreRoomReadSchema.parse(value));
 }
 
+/**
+ * Technocore prefixes plain-text reads with a "!! UNTRUSTED CONTENT" banner
+ * line. It is not part of the stored value, so it must not reach CAS
+ * comparisons or the UI.
+ */
+export function stripUntrustedBanner(text: string): string {
+  if (!text.startsWith('!! UNTRUSTED CONTENT')) return text;
+  const rest = text.slice(text.indexOf(String.fromCharCode(10)) + 1);
+  return rest.replace(/^\s+/u, '');
+}
+
 export interface TechnocoreAdapter {
   checkHealth(): Promise<number>;
   listRooms(): Promise<Room[]>;
@@ -171,7 +182,14 @@ export interface TechnocoreAdapter {
     did: string,
     mailbox: string,
     x25519PublicKey?: string,
+    rails?: string[],
   ): Promise<void>;
+  setNoteConditional(
+    namespace: string,
+    key: string,
+    value: string,
+    condition: { ifAbsent?: boolean; expected?: string },
+  ): Promise<boolean>;
   claimOwnedRoom(
     room: string,
     did: string,
@@ -472,7 +490,7 @@ export class HttpTechnocoreAdapter implements TechnocoreAdapter {
     );
     if (response.status === 404) return null;
     if (!response.ok) throw new Error(`Technocore HTTP ${response.status}`);
-    const value = await response.text();
+    const value = stripUntrustedBanner(await response.text());
     return value || null;
   }
   async setNote(
@@ -506,6 +524,37 @@ export class HttpTechnocoreAdapter implements TechnocoreAdapter {
       return;
     }
     await technocoreFetch(target, { headers: { accept: 'text/plain' } });
+  }
+  /**
+   * Compare-and-set note write. `ifAbsent` only creates; `expected` replaces
+   * only when the current value matches. Returns false on a 409 conflict.
+   */
+  async setNoteConditional(
+    namespace: string,
+    key: string,
+    rawValue: string,
+    condition: { ifAbsent?: boolean; expected?: string },
+  ): Promise<boolean> {
+    if (!roomNamePattern.test(namespace) || !roomNamePattern.test(key))
+      throw new Error('Invalid Technocore note address.');
+    const value = normalizeTechnocoreText(rawValue);
+    if (!value) throw new Error('Technocore note value is required.');
+    const query = new URLSearchParams();
+    if (condition.ifAbsent) query.set('if_absent', '1');
+    if (condition.expected !== undefined)
+      query.set('if', normalizeTechnocoreText(condition.expected));
+    const response = await fetch(
+      this.url(
+        `/kv/${encodeURIComponent(namespace)}/${encodeURIComponent(key)}/set/${encodeURIComponent(value)}?${query.toString()}`,
+      ),
+      { headers: { accept: 'text/plain' } },
+    );
+    if (response.status === 409) return false;
+    if (!response.ok)
+      throw new Error(
+        `Technocore HTTP ${response.status}${response.status === 429 ? ' — rate limited' : ''}`,
+      );
+    return true;
   }
   async resolveProfile(did: string): Promise<TechnocoreProfile | null> {
     const fingerprint = technocoreDidFingerprint(did);
@@ -547,6 +596,7 @@ export class HttpTechnocoreAdapter implements TechnocoreAdapter {
     did: string,
     mailbox: string,
     x25519PublicKey?: string,
+    rails: string[] = ['paper'],
   ): Promise<void> {
     if (!did.startsWith('did:key:z6Mk'))
       throw new Error('An Ed25519 did:key is required.');
@@ -559,6 +609,7 @@ export class HttpTechnocoreAdapter implements TechnocoreAdapter {
         ? `x25519:${bytesToBase64Url(base64ToBytes(x25519PublicKey))}`
         : '',
       `mailbox:${mailbox}`,
+      rails.length ? `tclk1:${rails.join(',')}` : '',
     ]
       .filter(Boolean)
       .join(' ');

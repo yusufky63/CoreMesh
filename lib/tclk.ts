@@ -5,12 +5,13 @@ import { verifyTechnocoreMessage } from './crypto';
 import type { ProtocolMessage } from './domain';
 
 /**
- * tclk/1 — Technocore Lock Protocol, read-only verifier.
+ * tclk/1 — Technocore Lock Protocol: verifier and frame builders.
  *
  * Mirrors the normative wire format and state machine published by Flop Labs
- * (github.com/flop-labs/tclk, SPEC.md §3–§4). CoreMesh only decodes, verifies
- * and folds signed transcripts; it never mints secrets, posts frames or holds
- * value. Every guard fails closed and reports a reason instead of throwing.
+ * (github.com/flop-labs/tclk, SPEC.md §3–§4). Verification folds signed
+ * transcripts with fail-closed guards; the builders at the end let CoreMesh
+ * take part in a deal (lib/deal-flow.ts posts them). Value only moves on a
+ * rail that enforces it; the paper rail is a rehearsal record.
  */
 
 export const TCLK_PREFIX = 'tclk1 ';
@@ -1038,4 +1039,109 @@ export function describeDeadline(
         passed,
       };
   return { label: passed ? 'now' : '<1s', passed };
+}
+
+/* ------------------------------------------------------------------------ */
+/* Frame builders — used when CoreMesh takes part in a deal itself.          */
+/* ------------------------------------------------------------------------ */
+
+export function randomNonceHex(bytes = 8): string {
+  return bytesToHex(crypto.getRandomValues(new Uint8Array(bytes)));
+}
+
+export interface OfferDraft {
+  from: string;
+  role: TclkRole;
+  amount: string;
+  asset: string;
+  rails: string[];
+  /** Minutes from now; claimBy must be before refundAfter. */
+  expiresInMinutes: number;
+  claimByMinutes: number;
+  refundAfterMinutes: number;
+  job?: TclkJob;
+  nowMs?: number;
+}
+
+export function buildOffer(draft: OfferDraft): OfferFrame {
+  const now = draft.nowMs ?? Date.now();
+  const fields: OfferFields = {
+    from: draft.from,
+    role: draft.role,
+    amount: draft.amount.trim(),
+    asset: draft.asset.trim(),
+    lock: 'hash',
+    rails: draft.rails.map((rail) => normalizeRail(rail) || rail),
+    claimByMs: now + Math.round(draft.claimByMinutes * 60_000),
+    refundAfterMs: now + Math.round(draft.refundAfterMinutes * 60_000),
+    expiresMs: now + Math.round(draft.expiresInMinutes * 60_000),
+    nonce: randomNonceHex(),
+  };
+  if (draft.job) fields.job = draft.job;
+  const frame: OfferFrame = { type: 'offer', ...fields, id: offerId(fields) };
+  validateFrame(frame);
+  return frame;
+}
+
+/** Payee side of a hash lock: mints the preimage and the accept frame. */
+export function buildAccept(
+  offer: OfferFrame,
+  from: string,
+): { accept: AcceptFrame; preimage: string } {
+  const lock = generateHashLock();
+  const core: AcceptCore = {
+    from,
+    ref: offer.id,
+    statement: lock.hash,
+    nonce: randomNonceHex(),
+  };
+  const accept: AcceptFrame = {
+    type: 'accept',
+    ...core,
+    contract: contractId(offer, core),
+  };
+  validateFrame(accept);
+  return { accept, preimage: lock.preimage };
+}
+
+export function buildLock(from: string, contract: string, rail: string, ref: string): LockFrame {
+  const frame: LockFrame = { type: 'lock', from, contract, rail, ref };
+  validateFrame(frame);
+  return frame;
+}
+
+export function buildReveal(from: string, contract: string, secret: string, ref?: string): RevealFrame {
+  const frame: RevealFrame = { type: 'reveal', from, contract, secret };
+  if (ref) frame.ref = ref;
+  validateFrame(frame);
+  return frame;
+}
+
+export function buildRefund(from: string, contract: string, ref?: string, reason?: string): RefundFrame {
+  const frame: RefundFrame = { type: 'refund', from, contract };
+  if (ref) frame.ref = ref;
+  if (reason) frame.reason = reason;
+  validateFrame(frame);
+  return frame;
+}
+
+export function buildCancel(from: string, contract: string, reason?: string): CancelFrame {
+  const frame: CancelFrame = { type: 'cancel', from, contract };
+  if (reason) frame.reason = reason;
+  validateFrame(frame);
+  return frame;
+}
+
+export function buildReceipt(from: string, contract: string, outcome: TclkOutcome, rail?: string, ref?: string): ReceiptFrame {
+  const frame: ReceiptFrame = { type: 'receipt', from, contract, outcome };
+  if (rail) frame.rail = rail;
+  if (ref) frame.ref = ref;
+  validateFrame(frame);
+  return frame;
+}
+
+/** The paper rail records rehearsal state in a world-writable CAS note. */
+export function paperRailAddress(contract: string): { namespace: string; key: string } {
+  if (!HEX32.test(contract)) fail('contract id must be 0x + 64 hex');
+  return { namespace: 'tclk-paper', key: contract.slice(2, 18) };
 }

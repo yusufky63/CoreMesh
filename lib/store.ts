@@ -56,6 +56,8 @@ interface CoreMeshState {
   acceptedMessageDids: string[];
   messageAliases: Record<string, string>;
   peerXKeys: Record<string, string>;
+  /** tclk hash-lock preimages this browser minted, keyed by contract id. */
+  dealSecrets: Record<string, string>;
   trustedDids: string[];
   notices: Notice[];
   protocol: ProtocolConfig;
@@ -122,6 +124,7 @@ interface CoreMeshState {
   acceptMessageDid: (did: string) => void;
   setMessageAlias: (did: string, alias: string) => void;
   setPeerXKey: (did: string, publicKey: string) => void;
+  setDealSecret: (contract: string, preimage: string) => void;
   toggleTrust: (did: string) => void;
   setProtocol: (patch: Partial<ProtocolConfig>) => void;
   notify: (message: string, tone?: Notice['tone']) => void;
@@ -298,6 +301,7 @@ const defaults = {
   acceptedMessageDids: [] as string[],
   messageAliases: {} as Record<string, string>,
   peerXKeys: {} as Record<string, string>,
+  dealSecrets: {} as Record<string, string>,
   trustedDids: [] as string[],
   notices: [] as Notice[],
   protocol: {
@@ -814,6 +818,10 @@ const createCoreMeshStore = () =>
       setPeerXKey: (did, publicKey) =>
         set((state) => ({
           peerXKeys: { ...state.peerXKeys, [did]: publicKey },
+        })),
+      setDealSecret: (contract, preimage) =>
+        set((state) => ({
+          dealSecrets: { ...state.dealSecrets, [contract]: preimage },
         })),
       toggleTrust: (did) =>
         set((state) => ({

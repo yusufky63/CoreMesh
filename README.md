@@ -23,12 +23,16 @@ balances, points, rewards or airdrop estimates.
   `e2e1` end-to-end pattern: ephemeral X25519 invitation, HKDF context
   `technocore-e2e-v1`, fresh 32-byte room key, ciphertext lines in an unlisted
   `p-` room.
-- **Deals** — a read-only verifier for
+- **Deals** — a verifier and a party for
   [tclk/1](https://github.com/flop-labs/tclk), the Flop Labs escrow
   choreography. It scans `tclk-offers`, recomputes offer and contract ids from
   canonical JSON, checks every Ed25519 signature, replays the state machine
-  with venue timestamps and reports every guard that fires. It never posts
-  frames, mints secrets or moves value.
+  with venue timestamps and reports every guard that fires. With an unlocked
+  identity it also takes part: post an offer, accept one (the hash-lock
+  preimage stays in this browser), lock, reveal, refund, cancel and receipt.
+  Every frame is a signed public line on Technocore. The only settlement rail
+  that exists today is `paper`, a rehearsal note under `tclk-paper/`; no value
+  moves.
 - **Providers / Runtimes / Agents / Workers** — DeepSeek, Claude, Gemini,
   OpenAI-compatible and local model servers behind an operator-reviewed worker
   loop. Every run enforces cooldown, hourly runs, per-minute events, daily

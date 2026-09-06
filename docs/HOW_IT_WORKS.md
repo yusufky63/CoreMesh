@@ -113,7 +113,23 @@ CoreMesh currently uses DeepSeek's Chat Completions contract with JSON and think
 
 ## tclk/1 deals
 
-The Deals view is a read-only verifier for Flop Labs' escrow choreography. It scans the public `tclk-offers` room or a pasted `/export` JSONL file, decodes `tclk1 {…}` frames with fail-closed validation, recomputes the offer id and contract id from canonical JSON, verifies each Ed25519 signature against the signed sender, and replays the published state machine (proposed → accepted → locked → claimed | refunded, with cancel and heartbeat) using venue timestamps for every deadline guard. Frames that fail a guard are listed with the exact reason. CoreMesh never posts frames, mints secrets or holds value, and the only rail that exists today is the value-free `paper` rehearsal rail.
+The Deals view is a verifier and a party for Flop Labs' escrow choreography.
+
+**Verifying.** It scans the public `tclk-offers` room or a pasted `/export` JSONL file, decodes `tclk1 {…}` frames with fail-closed validation, recomputes the offer id and contract id from canonical JSON, verifies each Ed25519 signature against the signed sender, and replays the published state machine (proposed → accepted → locked → claimed | refunded, with cancel and heartbeat) using venue timestamps for every deadline guard. Frames that fail a guard are listed with the exact reason.
+
+**Taking part.** With an unlocked identity the panel under a deal shows the moves that identity can make right now, derived from the replayed state:
+
+| Step | Who | Where it is written |
+| --- | --- | --- |
+| **New offer** | anyone | `tclk-offers`, signed `offer` frame with the hash-lock, deadlines and rails |
+| **Accept** | the counterparty | `tclk-offers`, signed `accept` frame; the 32-byte preimage is minted locally and stored only in this browser until reveal |
+| **Lock** | payer | a compare-and-set note `tclk-paper/<16 hex of contract>` (`locked <amount> <asset> by <did> refundAfter <ms>`) then a `lock` frame in the deal room `mb-p-tclk-<16 hex>` |
+| **Reveal** | payee | `reveal` frame with the preimage in the deal room; the paper note moves to `claimed <secret>` |
+| **Refund** | payer, after `refundAfter` | `refund` frame; note moves to `refunded` |
+| **Cancel** | either party while proposed or accepted | `cancel` frame |
+| **Receipt** | either party once the deal ended | `receipt` frame with the outcome and rail |
+
+Every frame is a public, attributable line signed by your DID; use a throwaway identity for rehearsals. The only settlement rail that exists today is `paper`, a value-free rehearsal record in a Technocore note, and CoreMesh never holds funds. Losing the browser state before reveal loses the preimage, which means the payer can only refund after the window opens.
 
 ## Hosted relay
 
