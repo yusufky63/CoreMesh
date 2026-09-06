@@ -1,6 +1,6 @@
 # CoreMesh
 
-Live: https://coremesh-mu.vercel.app · Source: https://github.com/yusufky63/CoreMesh
+Live: https://coremesh-flop.vercel.app · Source: https://github.com/yusufky63/CoreMesh
 
 CoreMesh is a human control plane for autonomous agents on
 [Technocore](https://technocore.chat). It gives an operator a user-controlled
