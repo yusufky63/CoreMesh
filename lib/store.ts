@@ -2,7 +2,6 @@
 
 import { create } from 'zustand';
 import { persist } from 'zustand/middleware';
-import { ed25519 } from '@noble/curves/ed25519.js';
 import type {
   Agent,
   E2ESession,
@@ -20,7 +19,7 @@ import type {
   WorkerLimits,
   WorkerRun,
 } from './domain';
-import { didFromPublicKey, randomId, signMessage } from './crypto';
+import { randomId } from './crypto';
 import { WORKER_BUDGET_DEFAULTS, roomPrefix, taskTransitions } from './domain';
 import { evaluateWorker } from './worker-policy';
 
@@ -135,110 +134,6 @@ interface CoreMeshState {
 
 const iso = (offsetSeconds = 0) =>
   new Date(Date.now() + offsetSeconds * 1000).toISOString();
-const signedSeedMessage = (
-  id: string,
-  roomId: string,
-  text: string,
-  seq: string,
-  offset: number,
-  keyByte: number,
-): ProtocolMessage => {
-  const secretKey = Uint8Array.from(
-    { length: 32 },
-    (_, index) => (keyByte + index) % 255,
-  );
-  const from = didFromPublicKey(ed25519.getPublicKey(secretKey));
-  const base = {
-    roomId,
-    from,
-    text,
-    createdAt: iso(offset),
-    seq,
-    nonce: `local-${seq}`,
-  };
-  return {
-    id,
-    ...base,
-    signature: signMessage(base, secretKey),
-    verified: true,
-  };
-};
-const seedRooms: Room[] = [
-  {
-    id: 'room_research',
-    sample: true,
-    name: 'research',
-    kind: 'public',
-    topic: 'agent research collaboration',
-    source: 'local',
-    createdAt: iso(-3600),
-    bookmarked: true,
-    messageCount: 3,
-    signedPercent: 67,
-  },
-  {
-    id: 'room_jobs',
-    sample: true,
-    name: 'd-jobs',
-    kind: 'owned',
-    topic: 'useful agent tasks',
-    source: 'local',
-    createdAt: iso(-3200),
-    ownerDid: 'did:key:z6MkLocalOperator',
-    bookmarked: false,
-    messageCount: 1,
-    signedPercent: 100,
-  },
-  {
-    id: 'room_debug',
-    sample: true,
-    name: 'e-debug',
-    kind: 'ephemeral',
-    topic: 'temporary protocol debugging',
-    source: 'local',
-    createdAt: iso(-1800),
-    bookmarked: false,
-    messageCount: 0,
-    signedPercent: 0,
-  },
-];
-const seedMessages: ProtocolMessage[] = [
-  signedSeedMessage(
-    'msg_1',
-    'room_research',
-    'Protocol adapter boundary mapped. No provider lock-in is required.',
-    '10879',
-    -310,
-    11,
-  ),
-  signedSeedMessage(
-    'msg_2',
-    'room_research',
-    'Verified the artifact hash against the submitted receipt.',
-    '10880',
-    -240,
-    73,
-  ),
-  {
-    id: 'msg_3',
-    roomId: 'room_research',
-    from: '~guest',
-    text: 'Unsigned local observation.',
-    createdAt: iso(-120),
-    seq: '10881',
-    nonce: 'local-10881',
-    verified: false,
-  },
-  signedSeedMessage(
-    'msg_4',
-    'room_jobs',
-    'Task: compare room ownership semantics. Evidence required.',
-    '9281',
-    -90,
-    139,
-  ),
-];
-
 const seedProviders: Provider[] = [
   {
     id: 'provider_deepseek',
@@ -295,8 +190,8 @@ const defaults = {
   relayAccessToken: '',
   runtimes: seedRuntimes,
   agents: [] as Agent[],
-  rooms: seedRooms,
-  messages: seedMessages,
+  rooms: [] as Room[],
+  messages: [] as ProtocolMessage[],
   workers: [] as Worker[],
   runs: [] as WorkerRun[],
   tasks: [] as Task[],
@@ -398,17 +293,27 @@ export function migratePersistedState(
       rooms: worker.rooms || [],
     };
   });
-  // The three demo rooms shipped with a fresh install predate the flag.
-  const sampleIds = new Set(['room_research', 'room_jobs', 'room_debug']);
-  const rooms = (persisted.rooms || defaults.rooms).map((room) =>
-    sampleIds.has(room.id) && room.source === 'local'
-      ? { ...room, sample: true }
-      : room,
+  // Earlier builds shipped three offline demo rooms with fabricated messages.
+  // They are not on Technocore, so a worker attached to one never sees traffic;
+  // drop them and their seeded lines rather than leave fake data in the console.
+  const demoRoomIds = new Set(['room_research', 'room_jobs', 'room_debug']);
+  const rooms = (persisted.rooms || []).filter(
+    (room) => !(demoRoomIds.has(room.id) && room.source === 'local'),
   );
+  const messages = (persisted.messages || []).filter(
+    (message) => !demoRoomIds.has(message.roomId),
+  );
+  const workerIds = new Set(workers.map((worker) => worker.id));
+  const runs = (persisted.runs || []).filter((run) => workerIds.has(run.workerId));
   return {
     ...persisted,
-    workers,
+    workers: workers.map((worker) => ({
+      ...worker,
+      rooms: worker.rooms.filter((id) => !demoRoomIds.has(id)),
+    })),
     rooms,
+    messages,
+    runs,
     providers: providers.some((provider) => provider.kind === 'deepseek')
       ? providers
       : [deepSeek, ...providers],

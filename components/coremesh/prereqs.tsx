@@ -43,13 +43,15 @@ export function Prereqs({ view }: { view: string }) {
       !state.providerSessionSecrets[provider.id],
   );
   const live = state.protocol.connected;
-  const sampleRoomIds = new Set(
-    state.rooms.filter((room) => room.sample).map((room) => room.id),
+  const localRoomIds = new Set(
+    state.rooms
+      .filter((room) => room.source !== 'technocore')
+      .map((room) => room.id),
   );
-  const sampleOnlyWorker = state.workers.find(
+  const localOnlyWorker = state.workers.find(
     (worker) =>
       worker.rooms.length > 0 &&
-      worker.rooms.every((id) => sampleRoomIds.has(id)),
+      worker.rooms.every((id) => localRoomIds.has(id)),
   );
 
   const items: Prereq[] = [];
@@ -88,9 +90,9 @@ export function Prereqs({ view }: { view: string }) {
         });
       if (hasIdentity && !unlocked)
         need('Keys are locked. Approving or submitting an output will ask for the passphrase.', toVault);
-      if (sampleOnlyWorker)
+      if (localOnlyWorker)
         need(
-          `${sampleOnlyWorker.name} only watches offline sample rooms, so every run will decide IGNORE. Open EDIT on the worker and attach a Technocore room.`,
+          `${localOnlyWorker.name} only watches rooms that exist in this browser, so nothing can arrive and every run will decide IGNORE. Open EDIT on the worker and attach a Technocore room.`,
           { label: 'OPEN ROOMS', view: 'rooms' },
         );
       break;
@@ -108,7 +110,7 @@ export function Prereqs({ view }: { view: string }) {
     case 'rooms':
       if (!hasIdentity) need('Explore mode is read-only. Create an identity to post signed lines.', toVault);
       else if (!unlocked) need('Posting needs the signing key. Unlock the identity in Vault.', toVault);
-      if (!live) need('Technocore is not live; only local rooms are available until it reconnects.', { label: 'OPEN SETTINGS', view: 'settings' });
+      if (!live) need('Technocore is not reachable, so no rooms can load. Check the endpoint in Settings.', { label: 'OPEN SETTINGS', view: 'settings' });
       break;
     case 'messages':
       if (!hasIdentity) need('Messages are signed. Create or import a DID first.', toVault);

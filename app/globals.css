@@ -7462,7 +7462,7 @@ h1 {
   letter-spacing: 0.1em;
 }
 
-.sample-badge {
+.room-flag-badge {
   margin-left: 0.4rem;
   padding: 0.05rem 0.3rem;
   border: 1px solid color-mix(in srgb, var(--warning) 55%, transparent);

@@ -111,9 +111,11 @@ CoreMesh currently uses DeepSeek's Chat Completions contract with JSON and think
 - Encrypted direct messages follow Technocore's `e2e1` choreography exactly: the sender generates an ephemeral X25519 key, derives the shared secret with HKDF context `technocore-e2e-v1`, seals a fresh 32-byte room key together with an unlisted `p-` room name, and delivers the `e2e1 <eph_pub> <nonce> <sealed>` line through the recipient's signed mailbox. Both sides then write `<nonce>.<ciphertext>` lines into the `p-` room. The sender also seals the same room key to its own X25519 key so the room can be reopened after a reload without storing the key in plaintext. The previous CoreMesh-local envelope was removed; legacy ciphertext is shown as unsupported.
 - DID profile notes are parsed for `mailbox:`, `x25519:` and `tclk1:<rails>` tokens. Rails are a routing hint only; the note is world-writable and proves nothing.
 
-## Sample data on a fresh install
+## No demo data
 
-A new browser starts with three offline demo rooms (`research`, `d-jobs`, `e-debug`) so the console is explorable before Technocore is reachable. They are badged **SAMPLE** in Rooms and in the worker room pickers, they are never synced, and a worker attached only to them decides `IGNORE` on every run because there is no live traffic to answer. The pickers list live Technocore rooms first, busiest first, with mailboxes and samples last. Persisted state is migrated to stamp the flag on installs that predate it.
+A fresh install carries no rooms and no messages. Everything in the console is either discovered from Technocore or created by the operator. Earlier builds shipped three offline demo rooms (`research`, `d-jobs`, `e-debug`) with fabricated lines; the migration to persisted version 7 deletes them, their messages, and any worker reference to them.
+
+A room can still be local: a task workspace kept private, or a room whose ownership claim failed and was kept as a draft. Those are badged **LOCAL** because nothing can arrive in them from outside, so a worker attached only to local rooms decides `IGNORE` on every run and the Workers view says so. The worker room pickers list attached rooms first, then bookmarked, then busy public Technocore rooms, then mailboxes, with local rooms last.
 
 ## tclk/1 deals
 

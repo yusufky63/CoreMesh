@@ -1,5 +1,11 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
-import type { Agent, Identity, Worker, WorkerRun } from './domain';
+import type {
+  Agent,
+  Identity,
+  ProtocolMessage,
+  Worker,
+  WorkerRun,
+} from './domain';
 
 const storage = new Map<string, string>();
 vi.stubGlobal('localStorage', {
@@ -71,7 +77,17 @@ describe('CoreMesh identity removal', () => {
   });
 
   it('clears key material and dependent local automation but preserves history', () => {
-    const historicalMessage = useCoreMesh.getState().messages[0];
+    const historicalMessage: ProtocolMessage = {
+      id: 'msg_history',
+      roomId: 'tc_lobby',
+      from: identity.did,
+      text: 'A line this identity already published.',
+      createdAt: '2026-09-01T00:00:00.000Z',
+      seq: '4211',
+      nonce: 'nonce-4211',
+      verified: true,
+    };
+    useCoreMesh.setState({ messages: [historicalMessage] });
     useCoreMesh.getState().addIdentity(identity);
     useCoreMesh.getState().addAgent(agent);
     useCoreMesh.getState().addWorker(worker);
@@ -164,8 +180,24 @@ describe('persisted state migration', () => {
     expect(migrated.workers![0].limits.cooldownSeconds).toBe(900);
   });
 
-  it('flags the shipped demo rooms so a worker cannot mistake them for live traffic', () => {
+  it('deletes the demo rooms earlier builds shipped, and the lines they carried', () => {
     const migrated = migratePersistedState({
+      workers: [
+        {
+          id: 'worker_demo',
+          agentId: 'agent_demo',
+          name: 'Demo Worker',
+          type: 'research-worker',
+          enabled: true,
+          rooms: ['room_research', 'tc_lobby'],
+          trigger: 'manual',
+          approvalMode: 'assisted',
+        },
+      ],
+      messages: [
+        { id: 'msg_1', roomId: 'room_research', from: '~guest', text: 'demo', createdAt: '', seq: '1', nonce: 'n1' },
+        { id: 'msg_2', roomId: 'tc_lobby', from: 'did:key:z6MkReal', text: 'live', createdAt: '', seq: '2', nonce: 'n2' },
+      ],
       rooms: [
         {
           id: 'room_research',
@@ -191,7 +223,8 @@ describe('persisted state migration', () => {
         },
       ],
     });
-    expect(migrated.rooms!.find((room) => room.id === 'room_research')?.sample).toBe(true);
-    expect(migrated.rooms!.find((room) => room.id === 'tc_lobby')?.sample).toBeUndefined();
+    expect(migrated.rooms!.map((room) => room.id)).toEqual(['tc_lobby']);
+    expect(migrated.messages!.map((message) => message.id)).toEqual(['msg_2']);
+    expect(migrated.workers![0].rooms).toEqual(['tc_lobby']);
   });
 });

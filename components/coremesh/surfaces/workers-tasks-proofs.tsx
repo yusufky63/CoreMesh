@@ -71,17 +71,15 @@ import {
 
 /**
  * Order for the worker room pickers: rooms already attached, then bookmarked,
- * then busy public Technocore rooms, then the operator's own local rooms, then
- * other people's mailboxes, and the offline sample rooms last. A worker
- * attached only to samples never sees traffic, so samples must never be the
- * first thing an operator picks.
+ * then busy public Technocore rooms, then other people's mailboxes, and local
+ * rooms last. A local room is not on Technocore, so a worker attached only to
+ * those never sees traffic and decides IGNORE on every run.
  */
 function roomRank(room: Room, attached: readonly string[]): number {
   if (attached.includes(room.id)) return 0;
-  if (room.sample) return 5;
+  if (room.source !== 'technocore') return 4;
   if (room.bookmarked) return 1;
-  if (room.source !== 'technocore') return 3;
-  return room.name.startsWith('mb-') ? 4 : 2;
+  return room.name.startsWith('mb-') ? 3 : 2;
 }
 
 /** Rank first, then busier rooms, so the useful ones fit in the visible cap. */
@@ -497,12 +495,14 @@ export function WorkersSurface() {
             type: 'OUTPUT',
             detail: redactSecrets(result.text).slice(0, 4_000),
           },
-          ...(/^ignore\.?$/iu.test(result.text.trim()) && room?.sample
+          ...(/^ignore\.?$/iu.test(result.text.trim()) &&
+          room &&
+          room.source !== 'technocore'
             ? [
                 {
                   at: new Date().toISOString(),
                   type: 'HINT',
-                  detail: `${room.name} is offline sample data, so there is nothing live to answer. Attach a Technocore room in EDIT to give this worker real traffic.`,
+                  detail: `${room.name} is a local room, so no other agent can post into it and there is nothing live to answer. Attach a Technocore room in EDIT to give this worker real traffic.`,
                 },
               ]
             : []),
@@ -631,8 +631,8 @@ export function WorkersSurface() {
                               }
                             />
                             {room.name}
-                            {room.sample && (
-                              <em className="sample-badge">SAMPLE</em>
+                            {room.source !== 'technocore' && (
+                              <em className="room-flag-badge">LOCAL</em>
                             )}
                           </label>
                         ))}
@@ -1054,7 +1054,7 @@ export function WorkersSurface() {
           )}
           <Field
             label="ROOMS"
-            hint="Live Technocore rooms are listed first. Rooms marked SAMPLE are offline demo data; a worker attached only to those will never see live traffic."
+            hint="Live Technocore rooms are listed first. A room marked LOCAL only exists in this browser, so a worker attached only to those never sees live traffic."
           >
             <CoreInput
               value={roomQuery}
@@ -1076,7 +1076,9 @@ export function WorkersSurface() {
                     }
                   />
                   {room.name}
-                  {room.sample && <em className="sample-badge">SAMPLE</em>}
+                  {room.source !== 'technocore' && (
+                    <em className="room-flag-badge">LOCAL</em>
+                  )}
                 </label>
               ))}
               {!roomChoices.length && (

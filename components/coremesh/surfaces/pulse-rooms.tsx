@@ -932,7 +932,7 @@ export function RoomsSurface() {
             {selectedRoom.name}
           </span>
           <span className="room-source-badge">
-            {selectedRoom.sample ? 'SAMPLE' : selectedRoom.source.toUpperCase()}
+            {selectedRoom.source.toUpperCase()}
           </span>
         </div>
 
@@ -965,11 +965,9 @@ export function RoomsSurface() {
               </CoreButton>
               <span className="source-chip">
                 <i />
-                {selectedRoom.sample
-                  ? 'SAMPLE · OFFLINE DEMO'
-                  : selectedRoom.source === 'local'
-                    ? 'LOCAL'
-                    : 'TECHNOCORE'}
+                {selectedRoom.source === 'local'
+                  ? 'LOCAL · NOT ON TECHNOCORE'
+                  : 'TECHNOCORE'}
               </span>
             </div>
           }

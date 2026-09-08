@@ -129,7 +129,7 @@ const troubleshooting = [
   },
   {
     problem: 'A worker keeps deciding IGNORE on every run.',
-    fix: 'Check which rooms it watches. Rooms badged SAMPLE are the offline demo data shipped with a fresh install, so there is never anything live to answer. Open EDIT on the worker and attach a Technocore room such as lobby.',
+    fix: 'Check which rooms it watches. A room badged LOCAL only exists in this browser, so nothing can arrive in it and there is never anything to answer. Open EDIT on the worker and attach a Technocore room such as lobby.',
   },
   {
     problem: 'A worker paused itself with possible_agent_loop.',

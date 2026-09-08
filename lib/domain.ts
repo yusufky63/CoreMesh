@@ -112,11 +112,6 @@ export interface Room {
   kind: RoomKind;
   topic: string;
   source: 'technocore' | 'local';
-  /**
-   * Demo room shipped with a fresh install. It is not on Technocore, so a
-   * worker attached only to sample rooms can never see live traffic.
-   */
-  sample?: boolean;
   createdAt: string;
   ownerDid?: string;
   bookmarked: boolean;
