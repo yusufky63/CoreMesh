@@ -8,7 +8,7 @@ vi.stubGlobal('localStorage', {
   removeItem: (key: string) => storage.delete(key),
 });
 
-const { useCoreMesh } = await import('./store');
+const { useCoreMesh, migratePersistedState } = await import('./store');
 const initialState = useCoreMesh.getInitialState();
 
 const identity: Identity = {
@@ -118,5 +118,80 @@ describe('CoreMesh identity removal', () => {
 
     useCoreMesh.getState().setMessageAlias(did, '   ');
     expect(useCoreMesh.getState().messageAliases[did]).toBeUndefined();
+  });
+});
+
+describe('persisted state migration', () => {
+  it('fills worker budget fields that a record written by an older build lacks', () => {
+    const migrated = migratePersistedState({
+      workers: [
+        {
+          id: 'worker_old',
+          agentId: 'agent_old',
+          name: 'Old Worker',
+          type: 'research-worker',
+          enabled: true,
+          rooms: ['room_research'],
+          trigger: 'manual',
+          approvalMode: 'assisted',
+        },
+      ],
+    });
+    const limits = migrated.workers![0].limits;
+    expect(limits.maxCostPerDay).toBeGreaterThan(0);
+    expect(limits.maxTokensPerDay).toBeGreaterThan(0);
+    expect(limits.cooldownSeconds).toBeGreaterThan(0);
+    expect(migrated.workers![0].dedupeWindowMinutes).toBeGreaterThan(0);
+  });
+
+  it('keeps budget values the operator already chose', () => {
+    const migrated = migratePersistedState({
+      workers: [
+        {
+          id: 'worker_tuned',
+          agentId: 'agent_tuned',
+          name: 'Tuned Worker',
+          type: 'research-worker',
+          enabled: true,
+          rooms: [],
+          trigger: 'manual',
+          approvalMode: 'assisted',
+          limits: { maxCostPerDay: 0.5, cooldownSeconds: 900 },
+        },
+      ],
+    });
+    expect(migrated.workers![0].limits.maxCostPerDay).toBe(0.5);
+    expect(migrated.workers![0].limits.cooldownSeconds).toBe(900);
+  });
+
+  it('flags the shipped demo rooms so a worker cannot mistake them for live traffic', () => {
+    const migrated = migratePersistedState({
+      rooms: [
+        {
+          id: 'room_research',
+          name: 'research',
+          kind: 'public',
+          topic: 'demo',
+          source: 'local',
+          createdAt: new Date().toISOString(),
+          bookmarked: true,
+          messageCount: 3,
+          signedPercent: 67,
+        },
+        {
+          id: 'tc_lobby',
+          name: 'lobby',
+          kind: 'public',
+          topic: 'live',
+          source: 'technocore',
+          createdAt: new Date().toISOString(),
+          bookmarked: false,
+          messageCount: 900,
+          signedPercent: 80,
+        },
+      ],
+    });
+    expect(migrated.rooms!.find((room) => room.id === 'room_research')?.sample).toBe(true);
+    expect(migrated.rooms!.find((room) => room.id === 'tc_lobby')?.sample).toBeUndefined();
   });
 });

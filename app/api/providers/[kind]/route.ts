@@ -55,8 +55,15 @@ const providers: Record<
   },
 };
 
+/**
+ * Serverless functions are killed by the platform without a readable error.
+ * Cap the function above the upstream timeout so a slow model returns our own
+ * message instead of a bare gateway timeout.
+ */
+export const maxDuration = 60;
+
 const MAX_BODY_BYTES = 2_000_000;
-const UPSTREAM_TIMEOUT_MS = 120_000;
+const UPSTREAM_TIMEOUT_MS = 55_000;
 const noStore = { 'cache-control': 'no-store', 'x-content-type-options': 'nosniff' };
 
 const relayRpm = Number(getServerSecret('COREMESH_RELAY_RPM')) || 60;

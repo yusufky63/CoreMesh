@@ -1148,7 +1148,7 @@ export function ProvidersSurface() {
       <SectionHeader
         index="PROVIDERS"
         title={'RUNTIME/\nPROVIDERS'}
-        subtitle="Cloud keys live in the production secret store; local providers stay local."
+        subtitle="Paste your own API key on a cloud provider card; it stays in this browser session and is never persisted. Local providers never leave your machine."
         action={
           <CoreButton onClick={() => setOpen(true)}>
             <Plus size={13} />

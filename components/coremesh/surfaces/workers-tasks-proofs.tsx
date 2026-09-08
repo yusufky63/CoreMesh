@@ -31,6 +31,7 @@ import {
 import type {
   ApprovalMode,
   ProtocolMessage,
+  Room,
   Task,
   TaskStatus,
   Worker,
@@ -67,6 +68,27 @@ import {
   verifyAndComplete,
   type ReceiptChecks,
 } from '@/lib/task-flow';
+
+/**
+ * Order for the worker room pickers: rooms already attached, then bookmarked,
+ * then busy public Technocore rooms, then the operator's own local rooms, then
+ * other people's mailboxes, and the offline sample rooms last. A worker
+ * attached only to samples never sees traffic, so samples must never be the
+ * first thing an operator picks.
+ */
+function roomRank(room: Room, attached: readonly string[]): number {
+  if (attached.includes(room.id)) return 0;
+  if (room.sample) return 5;
+  if (room.bookmarked) return 1;
+  if (room.source !== 'technocore') return 3;
+  return room.name.startsWith('mb-') ? 4 : 2;
+}
+
+/** Rank first, then busier rooms, so the useful ones fit in the visible cap. */
+function compareRooms(a: Room, b: Room, attached: readonly string[]): number {
+  const byRank = roomRank(a, attached) - roomRank(b, attached);
+  return byRank || (b.messageCount || 0) - (a.messageCount || 0);
+}
 
 function storedArtifactContent(receipt?: WorkReceipt): string {
   if (!receipt) return '';
@@ -190,13 +212,10 @@ export function WorkersSurface() {
   const roomChoices = (() => {
     const query = roomQuery.trim().toLowerCase();
     return state.rooms
-      .filter(
-        (room) =>
-          rooms.includes(room.id) ||
-          (query
-            ? room.name.includes(query)
-            : room.source === 'local' || room.bookmarked),
+      .filter((room) =>
+        query ? room.name.includes(query) : true,
       )
+      .sort((a, b) => compareRooms(a, b, rooms))
       .slice(0, 40);
   })();
   const worker = state.workers.find((item) => item.id === selected);
@@ -478,6 +497,15 @@ export function WorkersSurface() {
             type: 'OUTPUT',
             detail: redactSecrets(result.text).slice(0, 4_000),
           },
+          ...(/^ignore\.?$/iu.test(result.text.trim()) && room?.sample
+            ? [
+                {
+                  at: new Date().toISOString(),
+                  type: 'HINT',
+                  detail: `${room.name} is offline sample data, so there is nothing live to answer. Attach a Technocore room in EDIT to give this worker real traffic.`,
+                },
+              ]
+            : []),
           {
             at: new Date().toISOString(),
             type: 'POLICY',
@@ -582,13 +610,12 @@ export function WorkersSurface() {
                     />
                     <div className="check-list">
                       {state.rooms
-                        .filter(
-                          (room) =>
-                            worker.rooms.includes(room.id) ||
-                            (roomQuery.trim()
-                              ? room.name.includes(roomQuery.trim().toLowerCase())
-                              : room.source === 'local' || room.bookmarked),
+                        .filter((room) =>
+                          roomQuery.trim()
+                            ? room.name.includes(roomQuery.trim().toLowerCase())
+                            : true,
                         )
+                        .sort((a, b) => compareRooms(a, b, worker.rooms))
                         .slice(0, 40)
                         .map((room) => (
                           <label key={room.id}>
@@ -604,6 +631,9 @@ export function WorkersSurface() {
                               }
                             />
                             {room.name}
+                            {room.sample && (
+                              <em className="sample-badge">SAMPLE</em>
+                            )}
                           </label>
                         ))}
                     </div>
@@ -1024,7 +1054,7 @@ export function WorkersSurface() {
           )}
           <Field
             label="ROOMS"
-            hint="Local, bookmarked and managed rooms are listed. Search to add any mapped Technocore room."
+            hint="Live Technocore rooms are listed first. Rooms marked SAMPLE are offline demo data; a worker attached only to those will never see live traffic."
           >
             <CoreInput
               value={roomQuery}
@@ -1046,6 +1076,7 @@ export function WorkersSurface() {
                     }
                   />
                   {room.name}
+                  {room.sample && <em className="sample-badge">SAMPLE</em>}
                 </label>
               ))}
               {!roomChoices.length && (

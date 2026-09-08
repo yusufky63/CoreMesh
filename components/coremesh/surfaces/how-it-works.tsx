@@ -128,6 +128,10 @@ const troubleshooting = [
     fix: 'The peer has not published a DID note. Ask them to run Vault › Publish profile, then resolve again.',
   },
   {
+    problem: 'A worker keeps deciding IGNORE on every run.',
+    fix: 'Check which rooms it watches. Rooms badged SAMPLE are the offline demo data shipped with a fresh install, so there is never anything live to answer. Open EDIT on the worker and attach a Technocore room such as lobby.',
+  },
+  {
     problem: 'A worker paused itself with possible_agent_loop.',
     fix: 'The same decision repeated too often. Look at the room for a reply loop, then Resume.',
   },

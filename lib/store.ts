@@ -17,10 +17,11 @@ import type {
   TaskStatus,
   WorkReceipt,
   Worker,
+  WorkerLimits,
   WorkerRun,
 } from './domain';
 import { didFromPublicKey, randomId, signMessage } from './crypto';
-import { roomPrefix, taskTransitions } from './domain';
+import { WORKER_BUDGET_DEFAULTS, roomPrefix, taskTransitions } from './domain';
 import { evaluateWorker } from './worker-policy';
 
 type Notice = {
@@ -165,6 +166,7 @@ const signedSeedMessage = (
 const seedRooms: Room[] = [
   {
     id: 'room_research',
+    sample: true,
     name: 'research',
     kind: 'public',
     topic: 'agent research collaboration',
@@ -176,6 +178,7 @@ const seedRooms: Room[] = [
   },
   {
     id: 'room_jobs',
+    sample: true,
     name: 'd-jobs',
     kind: 'owned',
     topic: 'useful agent tasks',
@@ -188,6 +191,7 @@ const seedRooms: Room[] = [
   },
   {
     id: 'room_debug',
+    sample: true,
     name: 'e-debug',
     kind: 'ephemeral',
     topic: 'temporary protocol debugging',
@@ -335,6 +339,94 @@ export function persistedSlice(state: CoreMeshState): Partial<CoreMeshState> {
     relayAccessToken: '',
     notices: [],
   };
+}
+
+/**
+ * Upgrades a persisted snapshot to the current shape. Exported so the
+ * backfills stay testable: a record written before a field existed would
+ * otherwise render as undefined and take a whole surface down.
+ */
+export function migratePersistedState(
+  persistedState: unknown,
+): Partial<CoreMeshState> {
+  const persisted = persistedState as Partial<CoreMeshState>;
+  const hostedKinds = new Set<Provider['kind']>([
+    'openai-compatible',
+    'anthropic',
+    'gemini',
+    'deepseek',
+    'openrouter',
+    'groq',
+    'together',
+  ]);
+  const providers = (persisted.providers || defaults.providers).map(
+    (provider) =>
+      hostedKinds.has(provider.kind)
+        ? {
+            ...provider,
+            secretRequired: false,
+            serverManagedSecret: true,
+          }
+        : provider,
+  );
+  const deepSeek = defaults.providers.find(
+    (provider) => provider.kind === 'deepseek',
+  )!;
+  // A worker stored before a budget field existed renders as undefined and
+  // crashes the Workers surface, so fill every field it is expected to have.
+  const workers = (persisted.workers || []).map((worker) => {
+    const limits = (worker.limits || {}) as Partial<WorkerLimits>;
+    return {
+      ...worker,
+      limits: {
+        ...limits,
+        cooldownSeconds:
+          limits.cooldownSeconds ?? WORKER_BUDGET_DEFAULTS.cooldownSeconds,
+        maxRunsPerHour:
+          limits.maxRunsPerHour ?? WORKER_BUDGET_DEFAULTS.maxRunsPerHour,
+        maxEventsPerMinute:
+          limits.maxEventsPerMinute ?? WORKER_BUDGET_DEFAULTS.maxEventsPerMinute,
+        maxWritesPerMinute:
+          limits.maxWritesPerMinute ?? WORKER_BUDGET_DEFAULTS.maxWritesPerMinute,
+        maxTokensPerDay:
+          limits.maxTokensPerDay ?? WORKER_BUDGET_DEFAULTS.maxTokensPerDay,
+        maxCostPerDay:
+          limits.maxCostPerDay ?? WORKER_BUDGET_DEFAULTS.maxCostPerDay,
+      },
+      dedupeWindowMinutes: worker.dedupeWindowMinutes ?? 10,
+      loopThreshold: worker.loopThreshold ?? 3,
+      rooms: worker.rooms || [],
+    };
+  });
+  // The three demo rooms shipped with a fresh install predate the flag.
+  const sampleIds = new Set(['room_research', 'room_jobs', 'room_debug']);
+  const rooms = (persisted.rooms || defaults.rooms).map((room) =>
+    sampleIds.has(room.id) && room.source === 'local'
+      ? { ...room, sample: true }
+      : room,
+  );
+  return {
+    ...persisted,
+    workers,
+    rooms,
+    providers: providers.some((provider) => provider.kind === 'deepseek')
+      ? providers
+      : [deepSeek, ...providers],
+    providerSessionSecrets: {},
+    relayAccessToken: '',
+    e2eSessions: persisted.e2eSessions || [],
+    e2eRoomKeys: {},
+    messageAliases: persisted.messageAliases || {},
+    protocol: {
+      ...defaults.protocol,
+      ...persisted.protocol,
+      baseUrl: persisted.protocol?.baseUrl || defaults.protocol.baseUrl,
+      connected: false,
+      status: 'connecting',
+      consecutiveFailures: 0,
+      sourceLabel: 'TECHNOCORE · READY',
+    },
+  } as Partial<CoreMeshState>;
 }
 
 const createCoreMeshStore = () =>
@@ -846,52 +938,8 @@ const createCoreMeshStore = () =>
     }),
     {
       name: 'coremesh-local-v1',
-      version: 6,
-      migrate: (persistedState) => {
-        const persisted = persistedState as Partial<CoreMeshState>;
-        const hostedKinds = new Set<Provider['kind']>([
-          'openai-compatible',
-          'anthropic',
-          'gemini',
-          'deepseek',
-          'openrouter',
-          'groq',
-          'together',
-        ]);
-        const providers = (persisted.providers || defaults.providers).map(
-          (provider) =>
-            hostedKinds.has(provider.kind)
-              ? {
-                  ...provider,
-                  secretRequired: false,
-                  serverManagedSecret: true,
-                }
-              : provider,
-        );
-        const deepSeek = defaults.providers.find(
-          (provider) => provider.kind === 'deepseek',
-        )!;
-        return {
-          ...persisted,
-          providers: providers.some((provider) => provider.kind === 'deepseek')
-            ? providers
-            : [deepSeek, ...providers],
-          providerSessionSecrets: {},
-          relayAccessToken: '',
-          e2eSessions: persisted.e2eSessions || [],
-          e2eRoomKeys: {},
-          messageAliases: persisted.messageAliases || {},
-          protocol: {
-            ...defaults.protocol,
-            ...persisted.protocol,
-            baseUrl: persisted.protocol?.baseUrl || defaults.protocol.baseUrl,
-            connected: false,
-            status: 'connecting',
-            consecutiveFailures: 0,
-            sourceLabel: 'TECHNOCORE · READY',
-          },
-        } as Partial<CoreMeshState>;
-      },
+      version: 7,
+      migrate: migratePersistedState,
       partialize: persistedSlice,
       onRehydrateStorage: () => (state) => state?.setHydrated(true),
     },

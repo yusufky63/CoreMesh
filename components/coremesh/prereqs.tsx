@@ -43,6 +43,14 @@ export function Prereqs({ view }: { view: string }) {
       !state.providerSessionSecrets[provider.id],
   );
   const live = state.protocol.connected;
+  const sampleRoomIds = new Set(
+    state.rooms.filter((room) => room.sample).map((room) => room.id),
+  );
+  const sampleOnlyWorker = state.workers.find(
+    (worker) =>
+      worker.rooms.length > 0 &&
+      worker.rooms.every((id) => sampleRoomIds.has(id)),
+  );
 
   const items: Prereq[] = [];
   const need = (text: string, action?: Prereq['action']) => items.push({ text, action });
@@ -80,11 +88,22 @@ export function Prereqs({ view }: { view: string }) {
         });
       if (hasIdentity && !unlocked)
         need('Keys are locked. Approving or submitting an output will ask for the passphrase.', toVault);
+      if (sampleOnlyWorker)
+        need(
+          `${sampleOnlyWorker.name} only watches offline sample rooms, so every run will decide IGNORE. Open EDIT on the worker and attach a Technocore room.`,
+          { label: 'OPEN ROOMS', view: 'rooms' },
+        );
       break;
     case 'tasks':
       if (!hasIdentity) need('Tasks are owned by an identity. Create or import a DID first.', toVault);
       if (hasIdentity && !hasAgent)
         need('Assign & start needs an agent. Connect one before starting a task.', { label: 'OPEN AGENTS', view: 'agents' });
+      break;
+    case 'vault':
+      if (hasIdentity)
+        need(
+          'Keys live only in this browser. Export a .coremesh backup for every identity you intend to keep; clearing site data destroys them and any unrevealed deal secrets.',
+        );
       break;
     case 'rooms':
       if (!hasIdentity) need('Explore mode is read-only. Create an identity to post signed lines.', toVault);

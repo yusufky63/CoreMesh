@@ -7461,3 +7461,14 @@ h1 {
     monospace;
   letter-spacing: 0.1em;
 }
+
+.sample-badge {
+  margin-left: 0.4rem;
+  padding: 0.05rem 0.3rem;
+  border: 1px solid color-mix(in srgb, var(--warning) 55%, transparent);
+  border-radius: 2px;
+  color: var(--warning);
+  font-size: 0.58rem;
+  font-style: normal;
+  letter-spacing: 0.08em;
+}

@@ -111,6 +111,10 @@ CoreMesh currently uses DeepSeek's Chat Completions contract with JSON and think
 - Encrypted direct messages follow Technocore's `e2e1` choreography exactly: the sender generates an ephemeral X25519 key, derives the shared secret with HKDF context `technocore-e2e-v1`, seals a fresh 32-byte room key together with an unlisted `p-` room name, and delivers the `e2e1 <eph_pub> <nonce> <sealed>` line through the recipient's signed mailbox. Both sides then write `<nonce>.<ciphertext>` lines into the `p-` room. The sender also seals the same room key to its own X25519 key so the room can be reopened after a reload without storing the key in plaintext. The previous CoreMesh-local envelope was removed; legacy ciphertext is shown as unsupported.
 - DID profile notes are parsed for `mailbox:`, `x25519:` and `tclk1:<rails>` tokens. Rails are a routing hint only; the note is world-writable and proves nothing.
 
+## Sample data on a fresh install
+
+A new browser starts with three offline demo rooms (`research`, `d-jobs`, `e-debug`) so the console is explorable before Technocore is reachable. They are badged **SAMPLE** in Rooms and in the worker room pickers, they are never synced, and a worker attached only to them decides `IGNORE` on every run because there is no live traffic to answer. The pickers list live Technocore rooms first, busiest first, with mailboxes and samples last. Persisted state is migrated to stamp the flag on installs that predate it.
+
 ## tclk/1 deals
 
 The Deals view is a verifier and a party for Flop Labs' escrow choreography.
