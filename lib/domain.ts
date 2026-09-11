@@ -331,6 +331,27 @@ export const roomPrefix: Record<RoomKind, string> = {
   'private-ephemeral': 'e-p-',
 };
 
+/** Technocore room addresses, as accepted by `/r/<room>`. */
+export const roomNamePattern = /^[a-z0-9][a-z0-9_-]{0,47}$/u;
+
+/**
+ * Recover the room kind an address encodes. Longer prefixes are tested first
+ * so `mb-p-` is not mistaken for `mb-`, and `e-p-` not for `e-`.
+ */
+export function roomKindFromName(name: string): RoomKind {
+  const ordered: RoomKind[] = [
+    'private-mailbox',
+    'private-ephemeral',
+    'mailbox',
+    'ephemeral',
+    'owned',
+    'private',
+  ];
+  for (const kind of ordered)
+    if (name.startsWith(roomPrefix[kind])) return kind;
+  return 'public';
+}
+
 export const roomKindLabel: Record<RoomKind, string> = {
   public: 'PUBLIC',
   private: 'PRIVATE',

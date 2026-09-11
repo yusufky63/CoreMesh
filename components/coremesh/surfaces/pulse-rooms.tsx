@@ -479,6 +479,7 @@ export function RoomsSurface() {
     'all' | RoomKind | 'bookmarked' | 'active' | 'new' | 'signed-heavy'
   >('all');
   const [createOpen, setCreateOpen] = useState(false);
+  const [watchName, setWatchName] = useState('');
   const [roomName, setRoomName] = useState('');
   const [roomTopic, setRoomTopic] = useState('');
   const [roomKind, setRoomKind] = useState<RoomKind>('public');
@@ -714,6 +715,22 @@ export function RoomsSurface() {
     }
   };
 
+  const watchByAddress = () => {
+    const result = state.watchRoom(watchName);
+    if (!result)
+      return state.notify(
+        'A room address is lowercase letters, digits, dashes or underscores, up to 48 characters.',
+        'error',
+      );
+    setWatchName('');
+    setSelectedRoomId(result.room.id);
+    state.notify(
+      result.alreadyWatched
+        ? `${result.room.name} is already in the list.`
+        : `Watching ${result.room.name}.`,
+      result.alreadyWatched ? 'info' : 'success',
+    );
+  };
   const createRoom = async () => {
     if (state.exploreMode || !activeIdentity)
       return state.notify(
@@ -1149,6 +1166,20 @@ export function RoomsSurface() {
             placeholder="Search rooms"
           />
         </div>
+        <div className="search-box">
+          <Plus size={13} />
+          <CoreInput
+            value={watchName}
+            onChange={(event) => setWatchName(event.target.value)}
+            onKeyDown={(event) => {
+              if (event.key === 'Enter') watchByAddress();
+            }}
+            placeholder="Watch room by address"
+          />
+          <CoreButton variant="outline" onClick={watchByAddress}>
+            WATCH
+          </CoreButton>
+        </div>
         <div className="filter-row">
           <Filter size={12} />
           {(
@@ -1159,6 +1190,8 @@ export function RoomsSurface() {
               'public',
               'owned',
               'private',
+              'mailbox',
+              'ephemeral',
               'new',
               'signed-heavy',
             ] as const
@@ -1241,6 +1274,7 @@ export function RoomsSurface() {
             >
               <option value="public">Public Discussion</option>
               <option value="private">Private Collaboration</option>
+              <option value="mailbox">Public Inbox</option>
               <option value="private-mailbox">Private Inbox</option>
               <option value="owned">Managed Workspace</option>
               <option value="ephemeral">Temporary Session</option>

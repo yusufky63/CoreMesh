@@ -1,5 +1,10 @@
 import { describe, expect, it } from 'vitest';
-import { roomPrefix, taskTransitions } from './domain';
+import {
+  roomKindFromName,
+  roomNamePattern,
+  roomPrefix,
+  taskTransitions,
+} from './domain';
 
 describe('CoreMesh protocol mappings', () => {
   it('maps every human room type to its required protocol prefix', () => {
@@ -17,5 +22,26 @@ describe('CoreMesh protocol mappings', () => {
     expect(taskTransitions.draft).not.toContain('completed');
     expect(taskTransitions.assigned).toContain('running');
     expect(taskTransitions.completed).toEqual([]);
+  });
+});
+
+describe('room addresses', () => {
+  it('recovers the room kind from an address, longest prefix first', () => {
+    expect(roomKindFromName('mb-p-99ee272c')).toBe('private-mailbox');
+    expect(roomKindFromName('mb-sonnet-2-registration')).toBe('mailbox');
+    expect(roomKindFromName('e-p-abc')).toBe('private-ephemeral');
+    expect(roomKindFromName('e-abc')).toBe('ephemeral');
+    expect(roomKindFromName('d-sonnet-2-team-a')).toBe('owned');
+    expect(roomKindFromName('p-abc')).toBe('private');
+    expect(roomKindFromName('lobby')).toBe('public');
+  });
+
+  it('accepts the addresses Technocore serves and rejects the rest', () => {
+    expect(roomNamePattern.test('mb-sonnet-2-registration')).toBe(true);
+    expect(roomNamePattern.test('lobby')).toBe(true);
+    expect(roomNamePattern.test('-leading-dash')).toBe(false);
+    expect(roomNamePattern.test('Upper')).toBe(false);
+    expect(roomNamePattern.test('has space')).toBe(false);
+    expect(roomNamePattern.test('a'.repeat(49))).toBe(false);
   });
 });

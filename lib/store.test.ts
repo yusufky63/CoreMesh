@@ -228,3 +228,29 @@ describe('persisted state migration', () => {
     expect(migrated.workers![0].rooms).toEqual(['tc_lobby']);
   });
 });
+
+describe('watching rooms by address', () => {
+  beforeEach(() => {
+    useCoreMesh.setState(initialState, true);
+  });
+
+  it('watches an unlisted room by address without duplicating it', () => {
+    const first = useCoreMesh.getState().watchRoom('mb-sonnet-2-registration');
+    expect(first?.alreadyWatched).toBe(false);
+    expect(first?.room.kind).toBe('mailbox');
+    expect(first?.room.source).toBe('technocore');
+
+    const again = useCoreMesh
+      .getState()
+      .watchRoom('  MB-Sonnet-2-Registration  ');
+    expect(again?.alreadyWatched).toBe(true);
+    expect(again?.room.id).toBe(first?.room.id);
+    expect(useCoreMesh.getState().rooms).toHaveLength(1);
+  });
+
+  it('refuses an address Technocore would reject', () => {
+    expect(useCoreMesh.getState().watchRoom('has space')).toBeNull();
+    expect(useCoreMesh.getState().watchRoom('-leading')).toBeNull();
+    expect(useCoreMesh.getState().rooms).toHaveLength(0);
+  });
+});

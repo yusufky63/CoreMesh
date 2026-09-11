@@ -20,7 +20,13 @@ import type {
   WorkerRun,
 } from './domain';
 import { randomId } from './crypto';
-import { WORKER_BUDGET_DEFAULTS, roomPrefix, taskTransitions } from './domain';
+import {
+  WORKER_BUDGET_DEFAULTS,
+  roomKindFromName,
+  roomNamePattern,
+  roomPrefix,
+  taskTransitions,
+} from './domain';
 import { evaluateWorker } from './worker-policy';
 
 type Notice = {
@@ -85,6 +91,12 @@ interface CoreMeshState {
   /** Removes an agent together with its workers and run records. */
   removeAgent: (id: string) => void;
   addRoom: (room: Room) => void;
+  /**
+   * Track an existing Technocore room by its exact address. Unlisted rooms
+   * (`mb-`, `p-`, `e-`) never appear in `/rooms` discovery, so an operator who
+   * was handed an address has no other way to reach one.
+   */
+  watchRoom: (name: string) => { room: Room; alreadyWatched: boolean } | null;
   createRoom: (
     name: string,
     kind: RoomKind,
@@ -517,6 +529,25 @@ const createCoreMeshStore = () =>
             },
           ],
         })),
+      watchRoom: (name) => {
+        const address = name.trim().toLowerCase();
+        if (!roomNamePattern.test(address)) return null;
+        const existing = get().rooms.find((item) => item.name === address);
+        if (existing) return { room: existing, alreadyWatched: true };
+        const room: Room = {
+          id: randomId('room'),
+          name: address,
+          kind: roomKindFromName(address),
+          topic: '',
+          source: 'technocore',
+          createdAt: iso(),
+          bookmarked: false,
+          messageCount: 0,
+          signedPercent: 0,
+        };
+        set((state) => ({ rooms: [...state.rooms, room] }));
+        return { room, alreadyWatched: false };
+      },
       createRoom: (name, kind, topic, ownerDid, source = 'local') => {
         const cleanName =
           name
