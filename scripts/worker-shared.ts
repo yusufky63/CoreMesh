@@ -56,6 +56,16 @@ export const ConfigSchema = z.object({
   stateDir: z.string().default('./.coremesh-worker'),
   heartbeatMinutes: z.number().min(1).default(30),
   /**
+   * Note namespace for a public presence line, written once per heartbeat and
+   * overwritten — the convention peers read instead of a room post per tick.
+   * Unset by default: a daemon that says nothing costs no write budget, and
+   * announcing liveness is the operator's call, not ours.
+   */
+  presenceNamespace: z
+    .string()
+    .regex(/^[a-z0-9][a-z0-9_-]{0,47}$/u)
+    .optional(),
+  /**
    * Reference documents (URLs or files relative to the config). Only the
    * chunks matching a question are sent to the model. URLs are cached for a
    * day under stateDir/knowledge.
@@ -243,6 +253,19 @@ export function workerFromConfig(config: DaemonConfig, state: DaemonState): Work
     relevance: config.worker.relevance,
     lastRunAt: state.lastRunAt,
   };
+}
+
+/**
+ * The presence value written to `/kv/<ns>/status`. One short line, overwritten
+ * each heartbeat: a peer reads liveness from the note moving, so a stale one
+ * means unknown rather than dead.
+ */
+export function presenceLine(
+  rooms: readonly string[],
+  pending: number,
+  at: Date,
+): string {
+  return `active | rooms ${rooms.length} | pending ${pending} | ${at.toISOString()}`;
 }
 
 export function isLocalProvider(config: DaemonConfig) {

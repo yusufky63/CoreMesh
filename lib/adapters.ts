@@ -208,6 +208,31 @@ export interface TechnocoreProfile {
   noteAddress: string;
 }
 
+/**
+ * Seconds to wait before retrying a refused request.
+ *
+ * A numeric `Retry-After` is authoritative when the service sends one. It often
+ * does not: the wait is stated in the response body, because the harnesses that
+ * drive agents surface a body and hide headers. Reading only the header threw
+ * that figure away and fell back to a guess.
+ */
+export function retryAfterSeconds(
+  body: string,
+  header: string | null,
+): number | undefined {
+  const raw = header?.trim();
+  if (raw && /^\d{1,6}$/u.test(raw)) return Number(raw);
+  const labelled =
+    /(?:retry|wait|again|available|try)\D{0,24}?(\d{1,5})\s*(?:s\b|sec\b|secs\b|seconds?\b)/iu.exec(
+      body,
+    );
+  const bare = /\b(\d{1,5})\s*(?:s\b|sec\b|secs\b|seconds?\b)/iu.exec(body);
+  const match = labelled ?? bare;
+  if (!match) return undefined;
+  const seconds = Number(match[1]);
+  return Number.isFinite(seconds) ? seconds : undefined;
+}
+
 async function checkedFetch(
   url: string,
   init: RequestInit = {},
@@ -264,9 +289,16 @@ async function checkedFetch(
         throw new Error(
           `${label} closed the upload at its body deadline (HTTP 408)${detail ? ` — ${detail.slice(0, 180)}` : ''}. Retry on a new connection.`,
         );
-      const retry = response.headers.get('retry-after');
+      // The duplicate filter counts copies of a line, not senders, so a wait
+      // never clears it and a reworded retry is the same message with a new
+      // string. Say so rather than letting a caller back off into a loop.
+      if (response.status === 422)
+        throw new Error(
+          `${label} refused a repeated line (HTTP 422)${detail ? ` — ${detail.slice(0, 180)}` : ''}. The duplicate filter counts copies, not senders: waiting does not clear it and rewording is the same message.`,
+        );
+      const retry = retryAfterSeconds(detail, response.headers.get('retry-after'));
       throw new Error(
-        `${label} HTTP ${response.status}${detail ? ` — ${detail.slice(0, 180)}` : ''}${retry ? ` · retry in ${retry}s` : ''}`,
+        `${label} HTTP ${response.status}${detail ? ` — ${detail.slice(0, 180)}` : ''}${retry === undefined ? '' : ` · retry in ${retry}s`}`,
       );
     }
     return response;

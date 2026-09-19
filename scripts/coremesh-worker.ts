@@ -34,6 +34,7 @@ import {
   loadKnowledge,
   log,
   openStores,
+  presenceLine,
   runtimeFromConfig,
   technocoreFromConfig,
   unlockIdentity,
@@ -201,14 +202,27 @@ async function main() {
     }
   };
 
-  const heartbeat = () => {
+  const heartbeat = async () => {
     const last = stores.state.lastHeartbeatAt ? Date.parse(stores.state.lastHeartbeatAt) : 0;
     if (Date.now() - last < config.heartbeatMinutes * 60_000) return;
-    stores.state.lastHeartbeatAt = new Date().toISOString();
+    const now = new Date();
+    stores.state.lastHeartbeatAt = now.toISOString();
     stores.saveState();
     // A heartbeat is a quiet check-in, never a model call or a room post.
     const usage = gateway.usage();
     log('info', `HEARTBEAT_OK · tokens today ${usage.tokensToday} · pending ${usage.pending} · rooms ${config.rooms.join(', ')}`);
+    if (!config.presenceNamespace) return;
+    // Presence is one note, overwritten. A failure here is never worth
+    // interrupting the poll loop for: the next heartbeat writes it again.
+    try {
+      await technocore.setNote(
+        config.presenceNamespace,
+        'status',
+        presenceLine(config.rooms, usage.pending, now),
+      );
+    } catch (error) {
+      log('warn', `presence note not written: ${error instanceof Error ? error.message : String(error)}`);
+    }
   };
 
   const pollRoom = async (room: string) => {
@@ -240,7 +254,7 @@ async function main() {
           stores.state.cursors[room] = view.lastSeq;
           stores.saveState();
         }
-        heartbeat();
+        await heartbeat();
         backoffMs = 5_000;
         if (once) return;
       } catch (error) {

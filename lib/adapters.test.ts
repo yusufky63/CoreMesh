@@ -4,6 +4,7 @@ import {
   HttpAgentRuntime,
   HttpTechnocoreAdapter,
   executeAgentWithFallback,
+  retryAfterSeconds,
   stripUntrustedBanner,
 } from './adapters';
 import {
@@ -653,5 +654,76 @@ describe('Technocore note reads', () => {
       'locked 1 FLOP by did:key:z6Mk refundAfter 1',
     );
     expect(stripUntrustedBanner('plain value')).toBe('plain value');
+  });
+});
+
+describe('how long to wait after a refused request', () => {
+  it('takes a numeric Retry-After header as authoritative', () => {
+    expect(retryAfterSeconds('', '30')).toBe(30);
+    expect(retryAfterSeconds('wait 5 seconds', '12')).toBe(12);
+    expect(retryAfterSeconds('', '0')).toBe(0);
+  });
+
+  it('reads the figure the service states in the body when no header carries it', () => {
+    expect(retryAfterSeconds('rate limited: retry in 42 seconds', null)).toBe(42);
+    expect(retryAfterSeconds('too many reads, try again in 7s', null)).toBe(7);
+    expect(retryAfterSeconds('over budget; wait 15 sec', null)).toBe(15);
+    expect(retryAfterSeconds('slow down for 3 seconds', null)).toBe(3);
+  });
+
+  it('ignores a header that is not a plain count of seconds', () => {
+    expect(retryAfterSeconds('retry in 9 seconds', 'Wed, 21 Oct 2026 07:28:00 GMT')).toBe(9);
+    expect(retryAfterSeconds('', 'soon')).toBeUndefined();
+  });
+
+  it('returns nothing rather than guessing when no figure is stated', () => {
+    expect(retryAfterSeconds('rate limited', null)).toBeUndefined();
+    expect(retryAfterSeconds('', null)).toBeUndefined();
+    expect(retryAfterSeconds('offer 0x1ba2c9 rejected', null)).toBeUndefined();
+  });
+});
+
+describe('what a refused write tells the operator', () => {
+  afterEach(() => {
+    vi.unstubAllGlobals();
+  });
+
+  it('names the duplicate filter on 422 and does not offer a wait', async () => {
+    vi.stubGlobal(
+      'fetch',
+      vi.fn(
+        async () =>
+          new Response('that line is already in the room', { status: 422 }),
+      ),
+    );
+    await expect(
+      new HttpTechnocoreAdapter(protocol).setNote('research', 'status', 'active'),
+    ).rejects.toThrow(/counts copies, not senders/u);
+    await expect(
+      new HttpTechnocoreAdapter(protocol).setNote('research', 'status', 'active'),
+    ).rejects.not.toThrow(/retry in/u);
+  });
+
+  it('tells the caller to reopen the connection on 408', async () => {
+    vi.stubGlobal(
+      'fetch',
+      vi.fn(async () => new Response('upload deadline reached', { status: 408 })),
+    );
+    await expect(
+      new HttpTechnocoreAdapter(protocol).setNote('research', 'status', 'active'),
+    ).rejects.toThrow(/Retry on a new connection/u);
+  });
+
+  it('carries the service stated wait through to the message on 429', async () => {
+    vi.stubGlobal(
+      'fetch',
+      vi.fn(
+        async () =>
+          new Response('rate limited: retry in 42 seconds', { status: 429 }),
+      ),
+    );
+    await expect(
+      new HttpTechnocoreAdapter(protocol).setNote('research', 'status', 'active'),
+    ).rejects.toThrow(/retry in 42s/u);
   });
 });
