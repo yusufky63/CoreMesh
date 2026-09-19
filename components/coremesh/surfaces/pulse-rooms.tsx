@@ -480,6 +480,7 @@ export function RoomsSurface() {
   >('all');
   const [createOpen, setCreateOpen] = useState(false);
   const [watchName, setWatchName] = useState('');
+  const [authorityDraft, setAuthorityDraft] = useState('');
   const [roomName, setRoomName] = useState('');
   const [roomTopic, setRoomTopic] = useState('');
   const [roomKind, setRoomKind] = useState<RoomKind>('public');
@@ -509,6 +510,21 @@ export function RoomsSurface() {
   const isNearBottomRef = useRef(true);
   const roomGenerationsRef = useRef<Record<string, string>>({});
   const selectedRoom = state.rooms.find((room) => room.id === selectedRoomId);
+  const pinnedAuthority = selectedRoom
+    ? state.roomAuthorities[selectedRoom.name]
+    : undefined;
+  const pinAuthority = () => {
+    if (!selectedRoom) return;
+    const did = authorityDraft.trim();
+    if (!/^did:key:z6Mk[1-9A-HJ-NP-Za-km-z]{40,}$/u.test(did))
+      return state.notify(
+        'A room authority is an Ed25519 did:key, verified somewhere other than this room.',
+        'error',
+      );
+    state.setRoomAuthority(selectedRoom.name, did);
+    setAuthorityDraft('');
+    state.notify(`Authority pinned for ${selectedRoom.name}.`, 'success');
+  };
   const filtered = state.rooms.filter(
     (room) =>
       (filter === 'all' ||
@@ -1017,6 +1033,47 @@ export function RoomsSurface() {
             </div>
           </div>
         )}
+
+        <div className="authority-pin">
+          <div className="authority-pin-head">
+            <ShieldCheck size={14} />
+            <strong>ROOM AUTHORITY</strong>
+            {pinnedAuthority ? (
+              <span className="authority-pin-did" title={pinnedAuthority}>
+                {pinnedAuthority.slice(0, 22)}…
+              </span>
+            ) : (
+              <span className="authority-pin-did muted">NOT PINNED</span>
+            )}
+          </div>
+          <p>
+            Pin the DID you verified out of band. Nothing here infers it from
+            who posts: a room nobody owns carries an impostor&rsquo;s claim as
+            readily as a real one.
+          </p>
+          <div className="authority-pin-row">
+            <CoreInput
+              value={authorityDraft}
+              onChange={(event) => setAuthorityDraft(event.target.value)}
+              placeholder="did:key:z6Mk…"
+            />
+            <CoreButton variant="outline" onClick={pinAuthority}>
+              PIN
+            </CoreButton>
+            {pinnedAuthority && (
+              <CoreButton
+                variant="outline"
+                onClick={() => {
+                  state.setRoomAuthority(selectedRoom.name);
+                  setAuthorityDraft('');
+                  state.notify(`Authority pin cleared for ${selectedRoom.name}.`, 'info');
+                }}
+              >
+                CLEAR
+              </CoreButton>
+            )}
+          </div>
+        </div>
 
         <div className="room-message-stream">
           <div className="room-feed-status" aria-live="polite">

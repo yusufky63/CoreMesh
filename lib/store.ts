@@ -64,6 +64,12 @@ interface CoreMeshState {
   peerXKeys: Record<string, string>;
   /** tclk hash-lock preimages this browser minted, keyed by contract id. */
   dealSecrets: Record<string, string>;
+  /**
+   * Room name to the DID the operator pinned as that room's authority.
+   * Authority is never inferred from who posts: an unowned room carries an
+   * impostor's claim as readily as a real one.
+   */
+  roomAuthorities: Record<string, string>;
   trustedDids: string[];
   notices: Notice[];
   protocol: ProtocolConfig;
@@ -137,6 +143,8 @@ interface CoreMeshState {
   setMessageAlias: (did: string, alias: string) => void;
   setPeerXKey: (did: string, publicKey: string) => void;
   setDealSecret: (contract: string, preimage: string) => void;
+  /** Pins, or with no DID clears, a room's authority. */
+  setRoomAuthority: (room: string, did?: string) => void;
   toggleTrust: (did: string) => void;
   setProtocol: (patch: Partial<ProtocolConfig>) => void;
   notify: (message: string, tone?: Notice['tone']) => void;
@@ -213,6 +221,7 @@ const defaults = {
   messageAliases: {} as Record<string, string>,
   peerXKeys: {} as Record<string, string>,
   dealSecrets: {} as Record<string, string>,
+  roomAuthorities: {} as Record<string, string>,
   trustedDids: [] as string[],
   notices: [] as Notice[],
   protocol: {
@@ -334,6 +343,8 @@ export function migratePersistedState(
     e2eSessions: persisted.e2eSessions || [],
     e2eRoomKeys: {},
     messageAliases: persisted.messageAliases || {},
+    roomAuthorities: persisted.roomAuthorities || {},
+    trustedDids: persisted.trustedDids || [],
     protocol: {
       ...defaults.protocol,
       ...persisted.protocol,
@@ -703,6 +714,17 @@ const createCoreMeshStore = () =>
             : undefined,
           openTasks: state.tasks,
           receiptCount: state.receipts.length,
+          trustedDids: state.trustedDids,
+          roomAuthority: (() => {
+            // The pin is keyed by room name; a worker carries room ids.
+            const latest = state.messages
+              .filter((message) => worker.rooms.includes(message.roomId))
+              .at(-1);
+            const room = latest
+              ? state.rooms.find((item) => item.id === latest.roomId)
+              : undefined;
+            return room ? state.roomAuthorities[room.name] : undefined;
+          })(),
           now,
         });
         // Preflight runs measure their own wall time and consume no tokens.
@@ -851,6 +873,13 @@ const createCoreMeshStore = () =>
         set((state) => ({
           dealSecrets: { ...state.dealSecrets, [contract]: preimage },
         })),
+      setRoomAuthority: (room, did) =>
+        set((state) => {
+          const next = { ...state.roomAuthorities };
+          if (did) next[room] = did;
+          else delete next[room];
+          return { roomAuthorities: next };
+        }),
       toggleTrust: (did) =>
         set((state) => ({
           trustedDids: state.trustedDids.includes(did)

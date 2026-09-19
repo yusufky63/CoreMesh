@@ -235,6 +235,12 @@ export interface Worker {
    * default for busy public rooms.
    */
   relevance?: 'questions' | 'mentions';
+  /**
+   * Whose lines may start a run. `any` is the default. `trusted` answers only
+   * senders the operator marked trusted, plus the room's pinned authority
+   * where one is set — the frugal, safer choice in a room full of strangers.
+   */
+  senderPolicy?: 'any' | 'trusted';
 }
 
 export interface WorkerRun {

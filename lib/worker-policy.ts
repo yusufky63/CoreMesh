@@ -35,7 +35,29 @@ export interface WorkerPolicyContext {
   ownDid?: string;
   openTasks?: readonly Task[];
   receiptCount?: number;
+  /** DIDs the operator marked trusted. Only consulted under `senderPolicy`. */
+  trustedDids?: readonly string[];
+  /**
+   * The DID the operator pinned as this room's authority, if any. Pinning is
+   * deliberate and out-of-band: authority is never inferred from who posts,
+   * because a room nobody owns will happily carry an impostor's claim.
+   */
+  roomAuthority?: string;
   now?: number;
+}
+
+/**
+ * Whether a sender may start a run under the worker's sender policy. The
+ * room's pinned authority always counts as trusted for that room — pinning it
+ * is the operator saying so.
+ */
+export function senderIsTrusted(
+  from: string,
+  trustedDids: readonly string[] = [],
+  roomAuthority?: string,
+): boolean {
+  if (roomAuthority && from === roomAuthority) return true;
+  return trustedDids.includes(from);
 }
 
 export interface WorkerPolicyResult {
@@ -171,6 +193,23 @@ export function evaluateWorker(
         at: at(),
         type: 'FILTER',
         detail: 'Unsigned lines never trigger a run.',
+      });
+    } else if (
+      eventDriven &&
+      latestMessage &&
+      worker.senderPolicy === 'trusted' &&
+      !senderIsTrusted(
+        latestMessage.from,
+        context.trustedDids,
+        context.roomAuthority,
+      )
+    ) {
+      status = 'ignored';
+      decision = 'untrusted_sender';
+      logs.push({
+        at: at(),
+        type: 'FILTER',
+        detail: 'Sender is neither trusted nor this room’s pinned authority.',
       });
     } else if (
       eventDriven &&

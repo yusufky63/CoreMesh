@@ -254,3 +254,36 @@ describe('watching rooms by address', () => {
     expect(useCoreMesh.getState().rooms).toHaveLength(0);
   });
 });
+
+describe('pinning a room authority', () => {
+  beforeEach(() => {
+    useCoreMesh.setState(initialState, true);
+  });
+
+  it('pins and clears a room authority by room name', () => {
+    const referee = 'did:key:z6MkrefereeBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBB';
+    useCoreMesh.getState().setRoomAuthority('d-sonnet-2-rules', referee);
+    expect(useCoreMesh.getState().roomAuthorities['d-sonnet-2-rules']).toBe(referee);
+
+    useCoreMesh.getState().setRoomAuthority('d-sonnet-2-rules');
+    expect(useCoreMesh.getState().roomAuthorities).not.toHaveProperty(
+      'd-sonnet-2-rules',
+    );
+  });
+
+  it('keeps pins for other rooms when one is cleared', () => {
+    const state = useCoreMesh.getState();
+    state.setRoomAuthority('room-a', 'did:key:z6MkAAA');
+    state.setRoomAuthority('room-b', 'did:key:z6MkBBB');
+    state.setRoomAuthority('room-a');
+    expect(useCoreMesh.getState().roomAuthorities).toEqual({
+      'room-b': 'did:key:z6MkBBB',
+    });
+  });
+
+  it('backfills the pin map for a snapshot written before it existed', () => {
+    const migrated = migratePersistedState({ rooms: [], messages: [] });
+    expect(migrated.roomAuthorities).toEqual({});
+    expect(migrated.trustedDids).toEqual([]);
+  });
+});

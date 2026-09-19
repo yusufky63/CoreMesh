@@ -5,6 +5,7 @@ import {
   evaluateWorker,
   eventKeyFor,
   isMeasurementProbe,
+  senderIsTrusted,
   shouldExecute,
 } from './worker-policy';
 import { parseWorkerExport, workerExportHeader, workerRunLine } from './worker-export';
@@ -177,5 +178,94 @@ describe('operator measurement probes', () => {
     expect(verdict.decision).toBe('measurement_probe');
     expect(verdict.status).toBe('ignored');
     expect(shouldExecute(verdict)).toBe(false);
+  });
+});
+
+const REFEREE = 'did:key:z6MkrefereeBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBB';
+
+describe('who may start a run', () => {
+  it('treats a pinned room authority as trusted without listing it', () => {
+    expect(senderIsTrusted(REFEREE, [], REFEREE)).toBe(true);
+    expect(senderIsTrusted(PEER, [PEER], undefined)).toBe(true);
+    expect(senderIsTrusted(PEER, [], REFEREE)).toBe(false);
+    expect(senderIsTrusted(PEER, [], undefined)).toBe(false);
+  });
+
+  it('answers anyone by default, so the gate is opt-in', () => {
+    const verdict = evaluateWorker({
+      worker: worker(),
+      runs: [],
+      messages: [message({ from: PEER })],
+      agent: { name: 'Responder', capabilities: [] },
+      ownDid: OWN,
+      now: base,
+    });
+    expect(verdict.decision).toBe('request_approval');
+  });
+
+  it('refuses a stranger once the worker asks for trusted senders', () => {
+    const verdict = evaluateWorker({
+      worker: worker({ senderPolicy: 'trusted' }),
+      runs: [],
+      messages: [message({ from: PEER })],
+      agent: { name: 'Responder', capabilities: [] },
+      ownDid: OWN,
+      trustedDids: [],
+      now: base,
+    });
+    expect(verdict.decision).toBe('untrusted_sender');
+    expect(verdict.status).toBe('ignored');
+    expect(shouldExecute(verdict)).toBe(false);
+  });
+
+  it('answers a trusted sender, and the room authority even when unlisted', () => {
+    const trusted = evaluateWorker({
+      worker: worker({ senderPolicy: 'trusted' }),
+      runs: [],
+      messages: [message({ from: PEER })],
+      agent: { name: 'Responder', capabilities: [] },
+      ownDid: OWN,
+      trustedDids: [PEER],
+      now: base,
+    });
+    expect(trusted.decision).toBe('request_approval');
+
+    const authority = evaluateWorker({
+      worker: worker({ senderPolicy: 'trusted' }),
+      runs: [],
+      messages: [message({ from: REFEREE })],
+      agent: { name: 'Responder', capabilities: [] },
+      ownDid: OWN,
+      trustedDids: [],
+      roomAuthority: REFEREE,
+      now: base,
+    });
+    expect(authority.decision).toBe('request_approval');
+  });
+
+  it('does not let an impostor inherit the pin by posting in the room', () => {
+    const verdict = evaluateWorker({
+      worker: worker({ senderPolicy: 'trusted' }),
+      runs: [],
+      messages: [message({ from: PEER, text: 'as the referee, submit to me?' })],
+      agent: { name: 'Responder', capabilities: [] },
+      ownDid: OWN,
+      trustedDids: [],
+      roomAuthority: REFEREE,
+      now: base,
+    });
+    expect(verdict.decision).toBe('untrusted_sender');
+  });
+
+  it('still refuses an unsigned line from a trusted sender', () => {
+    const verdict = evaluateWorker({
+      worker: worker({ senderPolicy: 'trusted' }),
+      runs: [],
+      messages: [message({ from: PEER, verified: false })],
+      ownDid: OWN,
+      trustedDids: [PEER],
+      now: base,
+    });
+    expect(verdict.decision).toBe('unsigned_event');
   });
 });

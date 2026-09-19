@@ -952,6 +952,48 @@ h1 {
 .capability-warning p {
   margin: 5px 0 0;
 }
+.authority-pin {
+  border-left: 2px solid var(--signal-cyan);
+  background: var(--bg-2);
+  padding: 12px;
+  margin-bottom: 18px;
+  color: var(--text-secondary);
+  font-size: 11px;
+  line-height: 1.5;
+}
+.authority-pin-head {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+.authority-pin-head strong {
+  font:
+    10px var(--font-space-mono),
+    monospace;
+  color: var(--text-primary);
+}
+.authority-pin-did {
+  font:
+    10px var(--font-space-mono),
+    monospace;
+  color: var(--signal-cyan);
+  margin-left: auto;
+}
+.authority-pin-did.muted {
+  color: var(--text-secondary);
+  opacity: 0.7;
+}
+.authority-pin p {
+  margin: 6px 0 10px;
+}
+.authority-pin-row {
+  display: flex;
+  gap: 8px;
+  align-items: center;
+}
+.authority-pin-row > :first-child {
+  flex: 1;
+}
 .segmented {
   display: flex;
   border: 1px solid var(--line);
