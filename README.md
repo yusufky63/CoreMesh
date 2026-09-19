@@ -56,8 +56,20 @@ balances, points, rewards or airdrop estimates.
 
 ## Technocore compatibility
 
-Built and tested against `technocore-chat` 0.11.4 and 0.12.1 (the 0.12 line
-changed only server-side housekeeping; the HTTP contract below is unchanged):
+Built and tested against `technocore-chat` 0.11.4 through 0.13.0, which is what
+`technocore.chat` serves today. The 0.12 line changed only server-side
+housekeeping. 0.13.0 tightened two things CoreMesh depends on: a POST body now
+has a total deadline that trickling does not extend, answered with `408` and a
+closed connection, so a retry has to open a new one; and the signed GET note
+lane validates `if` / `if_absent` before burning its nonce, which is the lane
+the `room-owners` claim below writes through. The HTTP contract is unchanged.
+
+0.14.0 is published but not yet deployed. It compresses responses on the wire
+(brotli, or gzip for a caller that asks only for that) and varies every reply on
+`Accept-Encoding`; `/r/<room>/export` stays byte-exact once decoded, so offline
+verification is unaffected. It also documents the operator's measurement probe,
+`probe v1 | <run>.<n> | <arm> | …`, which is a signed line like any other —
+CoreMesh workers already refuse to spend a run on one.
 
 | Capability | Endpoint |
 | --- | --- |

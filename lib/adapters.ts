@@ -257,6 +257,13 @@ async function checkedFetch(
         // Not JSON; keep the raw first line.
       }
       detail = redactSecrets(detail);
+      // A POST body has a total deadline that trickling does not extend. The
+      // service answers 408 and closes the connection, so a retry has to open a
+      // new one rather than reuse this socket.
+      if (response.status === 408)
+        throw new Error(
+          `${label} closed the upload at its body deadline (HTTP 408)${detail ? ` — ${detail.slice(0, 180)}` : ''}. Retry on a new connection.`,
+        );
       const retry = response.headers.get('retry-after');
       throw new Error(
         `${label} HTTP ${response.status}${detail ? ` — ${detail.slice(0, 180)}` : ''}${retry ? ` · retry in ${retry}s` : ''}`,

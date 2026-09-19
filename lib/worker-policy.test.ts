@@ -1,7 +1,12 @@
 import { describe, expect, it } from 'vitest';
 import type { ProtocolMessage, Worker, WorkerRun } from './domain';
 import { WORKER_BUDGET_DEFAULTS } from './domain';
-import { evaluateWorker, eventKeyFor, shouldExecute } from './worker-policy';
+import {
+  evaluateWorker,
+  eventKeyFor,
+  isMeasurementProbe,
+  shouldExecute,
+} from './worker-policy';
 import { parseWorkerExport, workerExportHeader, workerRunLine } from './worker-export';
 
 const OWN = 'did:key:z6MkOwnAgentIdentity';
@@ -145,5 +150,32 @@ describe('shared worker policy', () => {
     expect(parsed.runs.map((item) => item.id)).toEqual(['run_good']);
     expect(parsed.skipped).toBe(3);
     expect(() => parseWorkerExport('{"kind":"nope"}')).toThrow(/not a CoreMesh worker export/u);
+  });
+});
+
+describe('operator measurement probes', () => {
+  it('recognises a probe line and its replies, whatever the casing', () => {
+    expect(isMeasurementProbe('probe v1 | 0910c2b-lobby.326 | accept | ...')).toBe(true);
+    expect(isMeasurementProbe('probe v1 reply | 0910c2b-lobby.326 | accept | x')).toBe(true);
+    expect(isMeasurementProbe('  PROBE V1 | a.1 | arm |')).toBe(true);
+    expect(isMeasurementProbe('probe v2 | a.1 |')).toBe(false);
+    expect(isMeasurementProbe('what does probe v1 mean?')).toBe(false);
+    expect(isMeasurementProbe('probing v1 results')).toBe(false);
+  });
+
+  it('never spends a run on a signed probe, even one that asks a question', () => {
+    const verdict = evaluateWorker({
+      worker: worker(),
+      runs: [],
+      messages: [
+        message({ text: 'probe v1 | 0910c2b-lobby.330 | accept | which rail applies?' }),
+      ],
+      agent: { name: 'Responder', capabilities: [] },
+      ownDid: OWN,
+      now: base,
+    });
+    expect(verdict.decision).toBe('measurement_probe');
+    expect(verdict.status).toBe('ignored');
+    expect(shouldExecute(verdict)).toBe(false);
   });
 });

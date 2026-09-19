@@ -14,6 +14,16 @@ import type {
  * Runs must be recorded by the caller so the next evaluation sees them.
  */
 
+/**
+ * The operator's measurement probe, `probe v1 | <run>.<n> | <arm> | …`, is a
+ * signed line like any other, so signature checking alone never stops one.
+ * Replies to a probe carry the same prefix and are equally not conversation.
+ * Answering either spends the worker's budget and pollutes the measurement.
+ */
+export function isMeasurementProbe(text: string): boolean {
+  return /^\s*probe\s+v1\b/iu.test(text);
+}
+
 export interface WorkerPolicyContext {
   worker: Worker;
   /** Runs already recorded for this worker, any order. */
@@ -161,6 +171,18 @@ export function evaluateWorker(
         at: at(),
         type: 'FILTER',
         detail: 'Unsigned lines never trigger a run.',
+      });
+    } else if (
+      eventDriven &&
+      latestMessage &&
+      isMeasurementProbe(latestMessage.text)
+    ) {
+      status = 'ignored';
+      decision = 'measurement_probe';
+      logs.push({
+        at: at(),
+        type: 'FILTER',
+        detail: 'Operator measurement probe, not conversation.',
       });
     } else if (alreadyHandled) {
       status = 'ignored';
