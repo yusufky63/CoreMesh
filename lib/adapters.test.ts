@@ -413,7 +413,8 @@ describe('Technocore HTTP adapter', () => {
       did,
       secretKey,
     );
-    const [url] = fetchMock.mock.calls[0];
+    // Call 0 is the occupancy pre-check; the claim itself follows it.
+    const [url] = fetchMock.mock.calls[1];
     expect(requestUrl(url)).toContain('/kv/room-owners/d-research/set-signed/');
     expect(requestUrl(url)).toContain('?if_absent=1');
   });
@@ -725,5 +726,78 @@ describe('what a refused write tells the operator', () => {
     await expect(
       new HttpTechnocoreAdapter(protocol).setNote('research', 'status', 'active'),
     ).rejects.toThrow(/retry in 42s/u);
+  });
+});
+
+describe('claiming a d- room', () => {
+  afterEach(() => {
+    vi.unstubAllGlobals();
+  });
+
+  const key = ed25519.utils.randomSecretKey();
+  const roomBody = (lastSeq: number) =>
+    `{"room":"d-jobs","count":0,"last_seq":${lastSeq},"messages":[]}`;
+
+  it('refuses before signing when the room is already in use', async () => {
+    const fetchMock = vi.fn<typeof fetch>(
+      async () =>
+        new Response(roomBody(48), {
+          headers: { 'content-type': 'application/json' },
+        }),
+    );
+    vi.stubGlobal('fetch', fetchMock);
+    await expect(
+      new HttpTechnocoreAdapter(protocol).claimOwnedRoom('d-jobs', 'did:key:z6MkX', key),
+    ).rejects.toThrow(/already holds messages \(seq 48\)/u);
+    // The read happened; the claim never did.
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+    expect(
+      requestUrl(fetchMock.mock.calls[0][0] as RequestInfo | URL),
+    ).not.toContain('room-owners');
+  });
+
+  it('claims an empty room, conditional on there being no owner', async () => {
+    const fetchMock = vi.fn<typeof fetch>(async (input) =>
+      requestUrl(input as RequestInfo | URL).includes('room-owners')
+        ? new Response('ok')
+        : new Response(roomBody(0), {
+            headers: { 'content-type': 'application/json' },
+          }),
+    );
+    vi.stubGlobal('fetch', fetchMock);
+    await new HttpTechnocoreAdapter(protocol).claimOwnedRoom(
+      'd-jobs',
+      'did:key:z6MkX',
+      key,
+    );
+    const claim = requestUrl(fetchMock.mock.calls[1][0] as RequestInfo | URL);
+    expect(claim).toContain('/kv/room-owners/d-jobs/set-signed/');
+    expect(claim).toContain('if_absent=1');
+  });
+
+  it('still attempts the claim when the room cannot be read at all', async () => {
+    const fetchMock = vi.fn<typeof fetch>(async (input) =>
+      requestUrl(input as RequestInfo | URL).includes('room-owners')
+        ? new Response('ok')
+        : new Response('no such room', { status: 404 }),
+    );
+    vi.stubGlobal('fetch', fetchMock);
+    await new HttpTechnocoreAdapter(protocol).claimOwnedRoom(
+      'd-jobs',
+      'did:key:z6MkX',
+      key,
+    );
+    expect(
+      requestUrl(fetchMock.mock.calls[1][0] as RequestInfo | URL),
+    ).toContain('room-owners');
+  });
+
+  it('rejects a room that could never be owned before touching the network', async () => {
+    const fetchMock = vi.fn<typeof fetch>(async () => new Response('ok'));
+    vi.stubGlobal('fetch', fetchMock);
+    await expect(
+      new HttpTechnocoreAdapter(protocol).claimOwnedRoom('lobby', 'did:key:z6MkX', key),
+    ).rejects.toThrow(/Only d-\* Technocore rooms/u);
+    expect(fetchMock).not.toHaveBeenCalled();
   });
 });

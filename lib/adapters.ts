@@ -665,6 +665,24 @@ export class HttpTechnocoreAdapter implements TechnocoreAdapter {
   ): Promise<void> {
     if (!/^d-[a-z0-9][a-z0-9_-]{0,45}$/u.test(room))
       throw new Error('Only d-* Technocore rooms can be owned.');
+    // A first claim is refused once the room holds a line, and the room is
+    // then unownable for good — claim it as you create it. Say that before
+    // spending a nonce on a request that cannot succeed. The read is
+    // cursor-free on purpose: a read carrying `since` echoes the cursor back
+    // as `last_seq` and would report an empty room as empty forever.
+    let occupied: string | undefined;
+    try {
+      const existing = await this.readRoomState(room, undefined, 1);
+      if (existing.lastSeq && BigInt(existing.lastSeq) > BigInt(0))
+        occupied = existing.lastSeq;
+    } catch {
+      // A room with no lines may not be readable yet. Absence of evidence is
+      // not evidence of occupancy, so let the claim itself decide.
+    }
+    if (occupied)
+      throw new Error(
+        `/r/${room} already holds messages (seq ${occupied}). Technocore refuses a first ownership claim on a room that is already in use, and the room stays unowned permanently — a d- room has to be claimed as it is created.`,
+      );
     const nonce = Date.now().toString();
     const signed = signTechnocoreNote(
       'room-owners',
